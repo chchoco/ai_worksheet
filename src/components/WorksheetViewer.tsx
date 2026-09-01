@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   Download,
   Printer,
-  Share2,
   Maximize2,
   Minimize2,
   ZoomIn,
@@ -20,10 +19,6 @@ import {
   Layers,
   Sparkles,
   Info,
-  Edit3,
-  Trash2,
-  Eye,
-  EyeOff,
 } from 'lucide-react';
 import { Worksheet } from '../types';
 import { formatBytes, formatDate, downloadFile, triggerPrintWorksheet } from '../utils/pdfHelper';
@@ -32,11 +27,6 @@ interface WorksheetViewerProps {
   worksheet: Worksheet | null;
   allWorksheets: Worksheet[];
   onSelectWorksheet: (id: string) => void;
-  onOpenShareModal: () => void;
-  isTeacherMode: boolean;
-  onEditWorksheet?: (worksheet: Worksheet) => void;
-  onDeleteWorksheet?: (id: string) => void;
-  onToggleAnswerVisibility?: (id: string, currentVal: boolean) => void;
   onRecordDownload: (id: string) => void;
 }
 
@@ -44,11 +34,6 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
   worksheet,
   allWorksheets,
   onSelectWorksheet,
-  onOpenShareModal,
-  isTeacherMode,
-  onEditWorksheet,
-  onDeleteWorksheet,
-  onToggleAnswerVisibility,
   onRecordDownload,
 }) => {
   const [zoomLevel, setZoomLevel] = useState<number>(100);
@@ -137,37 +122,6 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
               <Printer className="w-4 h-4" />
               <span>바로 인쇄하기</span>
             </button>
-
-            {/* Share / QR Code Button */}
-            <button
-              id="btn-open-share"
-              onClick={onOpenShareModal}
-              title="학생용 공유 링크 및 수업용 QR코드"
-              className="px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-1.5 transition-colors shadow-2xs"
-            >
-              <Share2 className="w-4 h-4 text-indigo-600" />
-              <span className="hidden sm:inline">공유/QR</span>
-            </button>
-
-            {/* Teacher Controls */}
-            {isTeacherMode && (
-              <div className="flex items-center gap-1 bg-amber-50 p-1 rounded-xl border border-amber-200">
-                <button
-                  onClick={() => onEditWorksheet?.(worksheet)}
-                  title="학습지 정보 수정"
-                  className="p-1.5 hover:bg-amber-200/60 rounded-lg text-amber-800 transition-colors"
-                >
-                  <Edit3 className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => onDeleteWorksheet?.(worksheet.id)}
-                  title="학습지 삭제"
-                  className="p-1.5 hover:bg-rose-100 rounded-lg text-rose-600 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            )}
           </div>
         </div>
 
@@ -199,7 +153,7 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
               </button>
             )}
 
-            {(worksheet.hasAnswerSheet || isTeacherMode) && (
+            {worksheet.hasAnswerSheet && worksheet.showAnswerSheetToStudents && (
               <button
                 onClick={() => setActiveTab('answers')}
                 className={`px-3 py-1.5 rounded-lg font-bold transition-colors flex items-center gap-1 ${
@@ -209,11 +163,6 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
                 }`}
               >
                 ✏️ 정답 및 해설
-                {worksheet.showAnswerSheetToStudents ? (
-                  <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1 py-0.2 rounded">공개</span>
-                ) : (
-                  <span className="text-[10px] bg-slate-200 text-slate-700 px-1 py-0.2 rounded">비공개</span>
-                )}
               </button>
             )}
           </div>
@@ -359,7 +308,7 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
                 <div className="space-y-8">
                   <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                     <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                      <Edit3 className="w-4 h-4 text-slate-700" />
+                      <FileText className="w-4 h-4 text-slate-700" />
                       [탐구 및 형성 평가 문제]
                     </h3>
                     <span className="text-xs text-slate-500 font-medium">스스로 풀고 정리해 봅시다.</span>
@@ -463,63 +412,32 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
         )}
 
         {/* Tab 3: Answer Sheet & Solutions */}
-        {activeTab === 'answers' && (
+        {activeTab === 'answers' && worksheet.hasAnswerSheet && worksheet.showAnswerSheetToStudents && (
           <div className="w-full max-w-3xl bg-white rounded-2xl shadow-sm border border-slate-200 p-6 sm:p-8">
             <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <Check className="w-5 h-5 text-emerald-600" />
                 <h3 className="text-lg font-bold text-slate-900">정답 및 해설지</h3>
               </div>
-
-              {/* Teacher Toggle for Student Answer Visibility */}
-              {isTeacherMode && onToggleAnswerVisibility && (
-                <button
-                  onClick={() => onToggleAnswerVisibility(worksheet.id, !!worksheet.showAnswerSheetToStudents)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 border transition-colors ${
-                    worksheet.showAnswerSheetToStudents
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                      : 'bg-slate-100 text-slate-600 border-slate-200'
-                  }`}
-                >
-                  {worksheet.showAnswerSheetToStudents ? (
-                    <>
-                      <Eye className="w-3.5 h-3.5" />
-                      학생에게 정답 공개 중
-                    </>
-                  ) : (
-                    <>
-                      <EyeOff className="w-3.5 h-3.5" />
-                      학생에게 정답 숨김
-                    </>
-                  )}
-                </button>
-              )}
+              <span className="text-xs bg-emerald-50 text-emerald-700 font-semibold px-2 py-0.5 rounded-full border border-emerald-200">
+                선생님 공개 해설
+              </span>
             </div>
 
-            {!worksheet.showAnswerSheetToStudents && !isTeacherMode ? (
-              <div className="text-center py-12 px-4 bg-slate-50 rounded-xl border border-slate-200">
-                <Info className="w-8 h-8 mx-auto text-amber-500 mb-2" />
-                <h4 className="font-bold text-slate-800 text-sm">정답 비공개 상태입니다</h4>
-                <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  선생님이 수업 후 정답을 공개하면 이곳에서 풀이와 해설을 확인할 수 있습니다. 먼저 스스로 문제를 풀어보세요!
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {worksheet.answerSheetText ? (
-                  <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl whitespace-pre-wrap font-sans text-xs sm:text-sm text-slate-800 leading-relaxed">
-                    {worksheet.answerSheetText}
-                  </div>
-                ) : (
-                  <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-700">
-                    <p className="font-bold mb-2">【예시 정답】</p>
-                    <p>1. (1) 원소  (2) 분자</p>
-                    <p className="mt-2">2. 원소는 물질의 기본 성분이며, 분자는 물질의 고유 성질을 유지하는 가장 작은 단위체입니다.</p>
-                    <p className="mt-2">3. 불꽃 반응을 통해 금속 원소의 종류를 빠르고 간편하게 구별할 수 있습니다.</p>
-                  </div>
-                )}
-              </div>
-            )}
+            <div className="space-y-4">
+              {worksheet.answerSheetText ? (
+                <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl whitespace-pre-wrap font-sans text-xs sm:text-sm text-slate-800 leading-relaxed">
+                  {worksheet.answerSheetText}
+                </div>
+              ) : (
+                <div className="p-5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-700">
+                  <p className="font-bold mb-2">【예시 정답】</p>
+                  <p>1. (1) 원소  (2) 분자</p>
+                  <p className="mt-2">2. 원소는 물질의 기본 성분이며, 분자는 물질의 고유 성질을 유지하는 가장 작은 단위체입니다.</p>
+                  <p className="mt-2">3. 불꽃 반응을 통해 금속 원소의 종류를 빠르고 간편하게 구별할 수 있습니다.</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

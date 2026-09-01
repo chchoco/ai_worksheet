@@ -2,8 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
 import { WorksheetSidebar } from './components/WorksheetSidebar';
 import { WorksheetViewer } from './components/WorksheetViewer';
-import { ShareModal } from './components/ShareModal';
-import { TeacherAdminModal } from './components/TeacherAdminModal';
+import { TeacherAdminPage } from './components/TeacherAdminPage';
 import { Worksheet, ClassSettings } from './types';
 import { DEFAULT_AI_UNITS } from './data/defaultUnits';
 
@@ -55,7 +54,18 @@ export default function App() {
   const [selectedWorksheetId, setSelectedWorksheetId] = useState<string>('ws-ai-1');
   const [loading, setLoading] = useState<boolean>(false);
 
-  // Filters & Search
+  // Routing state
+  const isRouteAdmin = () => {
+    return (
+      window.location.pathname.startsWith('/admin') ||
+      window.location.hash === '#admin' ||
+      new URLSearchParams(window.location.search).get('admin') === 'true'
+    );
+  };
+
+  const [isAdminRoute, setIsAdminRoute] = useState<boolean>(isRouteAdmin);
+
+  // Filters & Search for student view
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedUnitFilter, setSelectedUnitFilter] = useState<string>('all');
 
@@ -66,6 +76,7 @@ export default function App() {
       localStorage.getItem('is_teacher_authenticated') === 'true'
     );
   });
+
   const [teacherPin, setTeacherPin] = useState<string>(() => {
     return (
       sessionStorage.getItem('teacher_cached_pin') ||
@@ -74,12 +85,34 @@ export default function App() {
     );
   });
 
-  // Modals
-  const [isShareModalOpen, setIsShareModalOpen] = useState<boolean>(false);
-  const [isTeacherModalOpen, setIsTeacherModalOpen] = useState<boolean>(false);
-  const [teacherModalTab, setTeacherModalTab] = useState<'upload' | 'manage' | 'settings'>('upload');
+  // Listen to browser navigation (back/forward or URL change)
+  useEffect(() => {
+    const checkRoute = () => {
+      setIsAdminRoute(isRouteAdmin());
+    };
 
-  // Load Initial Data with graceful fallback
+    window.addEventListener('popstate', checkRoute);
+    window.addEventListener('hashchange', checkRoute);
+
+    return () => {
+      window.removeEventListener('popstate', checkRoute);
+      window.removeEventListener('hashchange', checkRoute);
+    };
+  }, []);
+
+  const navigateToAdmin = () => {
+    window.history.pushState({}, '', '/admin');
+    setIsAdminRoute(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const navigateToStudent = () => {
+    window.history.pushState({}, '', '/');
+    setIsAdminRoute(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Load Initial Data
   const fetchData = useCallback(async () => {
     try {
       const [settingsRes, worksheetsRes] = await Promise.all([
@@ -100,7 +133,6 @@ export default function App() {
           const list: Worksheet[] = worksheetsData.worksheets;
           setWorksheets(list);
 
-          // Check if there is a URL parameter for a specific worksheet
           const urlParams = new URLSearchParams(window.location.search);
           const wsParam = urlParams.get('worksheet');
           const unitParam = urlParams.get('unit');
@@ -121,7 +153,7 @@ export default function App() {
         }
       }
     } catch (err: any) {
-      console.warn('Backend sync error (gracefully running with loaded data):', err);
+      console.warn('Backend sync error:', err);
     } finally {
       setLoading(false);
     }
@@ -131,27 +163,13 @@ export default function App() {
     fetchData();
   }, [fetchData]);
 
-  // Handle URL change if user navigates with back/forward
-  useEffect(() => {
-    const handlePopState = () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      const wsParam = urlParams.get('worksheet');
-      if (wsParam && worksheets.some(w => w.id === wsParam)) {
-        setSelectedWorksheetId(wsParam);
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [worksheets]);
-
-  // Update URL query without full reload and record real view count when worksheet is selected
+  // Worksheet selection in student view
   const handleSelectWorksheet = async (id: string) => {
     setSelectedWorksheetId(id);
     const url = new URL(window.location.href);
     url.searchParams.set('worksheet', id);
     window.history.pushState({}, '', url.toString());
 
-    // Record real view count in backend
     try {
       const res = await fetch(`/api/worksheets/${id}`);
       const data = await res.json();
@@ -201,7 +219,6 @@ export default function App() {
       }
       return false;
     } catch (err) {
-      // Offline / fallback verification
       if (cleanPin === '5480!!' || cleanPin === '5480') {
         setIsTeacherMode(true);
         setTeacherPin(cleanPin);
@@ -303,11 +320,6 @@ export default function App() {
     }
   };
 
-  // Teacher Toggle Answer Sheet Visibility for students
-  const handleToggleAnswerVisibility = async (id: string, currentVal: boolean) => {
-    await handleUpdateWorksheet(id, { showAnswerSheetToStudents: !currentVal });
-  };
-
   // Teacher Update Settings
   const handleUpdateSettings = async (newSettings: Partial<ClassSettings>, newPin?: string): Promise<boolean> => {
     try {
@@ -358,7 +370,7 @@ export default function App() {
     }
   };
 
-  // Filtered worksheets by search & unit
+  // Filtered worksheets for student search & unit
   const filteredWorksheets = worksheets.filter(w => {
     const matchesUnit = selectedUnitFilter === 'all' || w.unitTitle === selectedUnitFilter;
     const matchesSearch =
@@ -371,20 +383,34 @@ export default function App() {
   });
 
   const selectedWorksheet = worksheets.find(w => w.id === selectedWorksheetId) || worksheets[0] || null;
-  // Always include all 4 official units plus any custom units from worksheets
   const existingUnits = Array.from(new Set([...DEFAULT_AI_UNITS, ...worksheets.map(w => w.unitTitle)])).filter(Boolean);
 
+  // If user visits /admin (or #admin / ?admin=true), render Teacher Admin Portal
+  if (isAdminRoute) {
+    return (
+      <TeacherAdminPage
+        isTeacherMode={isTeacherMode}
+        onAuthenticate={handleTeacherAuth}
+        onLogout={handleExitTeacherMode}
+        onNavigateToStudent={navigateToStudent}
+        onAddWorksheet={handleAddWorksheet}
+        onUpdateWorksheet={handleUpdateWorksheet}
+        onDeleteWorksheet={handleDeleteWorksheet}
+        onUpdateSettings={handleUpdateSettings}
+        onResetSample={handleResetSample}
+        worksheets={worksheets}
+        existingUnits={existingUnits}
+        settings={settings}
+      />
+    );
+  }
+
+  // Otherwise, render Public Student Portal
   return (
     <div className="min-h-screen flex flex-col bg-slate-100 text-slate-800">
-      {/* Top Header */}
+      {/* Student Top Header (No teacher buttons, no share modal) */}
       <Header
         settings={settings}
-        isTeacherMode={isTeacherMode}
-        onOpenTeacherModal={() => {
-          setTeacherModalTab('upload');
-          setIsTeacherModalOpen(true);
-        }}
-        onExitTeacherMode={handleExitTeacherMode}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         totalWorksheets={worksheets.length}
@@ -392,16 +418,11 @@ export default function App() {
 
       {/* Main Container */}
       <div className="flex-1 flex flex-col lg:flex-row max-w-7xl mx-auto w-full">
-        {/* Left / Top Sidebar for Unit & Lesson Organization */}
+        {/* Left Sidebar: 1~4 Units & Lessons list */}
         <WorksheetSidebar
           worksheets={filteredWorksheets}
           selectedWorksheetId={selectedWorksheet?.id || null}
           onSelectWorksheet={handleSelectWorksheet}
-          isTeacherMode={isTeacherMode}
-          onOpenTeacherUpload={() => {
-            setTeacherModalTab('upload');
-            setIsTeacherModalOpen(true);
-          }}
           selectedUnitFilter={selectedUnitFilter}
           onSelectUnitFilter={setSelectedUnitFilter}
         />
@@ -411,41 +432,9 @@ export default function App() {
           worksheet={selectedWorksheet}
           allWorksheets={filteredWorksheets}
           onSelectWorksheet={handleSelectWorksheet}
-          onOpenShareModal={() => setIsShareModalOpen(true)}
-          isTeacherMode={isTeacherMode}
-          onEditWorksheet={ws => {
-            setTeacherModalTab('upload');
-            setIsTeacherModalOpen(true);
-          }}
-          onDeleteWorksheet={handleDeleteWorksheet}
-          onToggleAnswerVisibility={handleToggleAnswerVisibility}
           onRecordDownload={handleRecordDownload}
         />
       </div>
-
-      {/* Share / QR Code Modal */}
-      <ShareModal
-        worksheet={selectedWorksheet}
-        isOpen={isShareModalOpen}
-        onClose={() => setIsShareModalOpen(false)}
-      />
-
-      {/* Teacher Management & Upload Modal */}
-      <TeacherAdminModal
-        isOpen={isTeacherModalOpen}
-        onClose={() => setIsTeacherModalOpen(false)}
-        isTeacherMode={isTeacherMode}
-        onAuthenticate={handleTeacherAuth}
-        onAddWorksheet={handleAddWorksheet}
-        onUpdateWorksheet={handleUpdateWorksheet}
-        onDeleteWorksheet={handleDeleteWorksheet}
-        onUpdateSettings={handleUpdateSettings}
-        onResetSample={handleResetSample}
-        worksheets={worksheets}
-        existingUnits={existingUnits}
-        settings={settings}
-        initialTab={teacherModalTab}
-      />
     </div>
   );
 }
