@@ -132,6 +132,19 @@ function writeDB(data: DBState) {
 // Ensure DB is initialized
 readDB();
 
+function checkTeacherPin(inputPin: any, storedPin: string): boolean {
+  if (!inputPin || typeof inputPin !== 'string') return false;
+  const cleanInput = inputPin.trim();
+  const cleanStored = (storedPin || '5480!!').trim();
+
+  if (cleanInput === cleanStored) return true;
+  // If stored is '5480!!', also accept '5480'
+  if (cleanStored === '5480!!' && cleanInput === '5480') return true;
+  // If stored is '5480', also accept '5480!!'
+  if (cleanStored === '5480' && cleanInput === '5480!!') return true;
+  return false;
+}
+
 // ----------------- API ENDPOINTS ----------------- //
 
 // 1. Get class settings & public info
@@ -150,7 +163,7 @@ app.get('/api/settings', (req, res) => {
 app.post('/api/teacher/verify', (req, res) => {
   const { pin } = req.body;
   const db = readDB();
-  if (pin === db.settings.teacherPin) {
+  if (checkTeacherPin(pin, db.settings.teacherPin)) {
     res.json({ success: true, message: '인증되었습니다.' });
   } else {
     res.status(401).json({ success: false, message: '선생님 비밀번호가 일치하지 않습니다.' });
@@ -162,7 +175,7 @@ app.post('/api/teacher/settings', (req, res) => {
   const { pin, newSettings, newPin } = req.body;
   const db = readDB();
 
-  if (pin !== db.settings.teacherPin) {
+  if (!checkTeacherPin(pin, db.settings.teacherPin)) {
     return res.status(401).json({ success: false, message: '권한이 없습니다.' });
   }
 
@@ -170,10 +183,10 @@ app.post('/api/teacher/settings', (req, res) => {
     db.settings = {
       ...db.settings,
       ...newSettings,
-      teacherPin: newPin || db.settings.teacherPin,
+      teacherPin: newPin ? newPin.trim() : db.settings.teacherPin,
     };
   } else if (newPin) {
-    db.settings.teacherPin = newPin;
+    db.settings.teacherPin = newPin.trim();
   }
 
   writeDB(db);
@@ -278,7 +291,7 @@ app.post('/api/worksheets', (req, res) => {
   const { pin, worksheet } = req.body;
   const db = readDB();
 
-  if (pin !== db.settings.teacherPin) {
+  if (!checkTeacherPin(pin, db.settings.teacherPin)) {
     return res.status(401).json({ success: false, message: '선생님 인증이 필요합니다.' });
   }
 
@@ -325,7 +338,7 @@ app.put('/api/worksheets/:id', (req, res) => {
   const { pin, updates } = req.body;
   const db = readDB();
 
-  if (pin !== db.settings.teacherPin) {
+  if (!checkTeacherPin(pin, db.settings.teacherPin)) {
     return res.status(401).json({ success: false, message: '권한이 없습니다.' });
   }
 
@@ -350,7 +363,7 @@ app.delete('/api/worksheets/:id', (req, res) => {
   const { pin } = req.body;
   const db = readDB();
 
-  if (pin !== db.settings.teacherPin) {
+  if (!checkTeacherPin(pin, db.settings.teacherPin)) {
     return res.status(401).json({ success: false, message: '권한이 없습니다.' });
   }
 
@@ -370,7 +383,7 @@ app.post('/api/teacher/reset-sample', (req, res) => {
   const { pin } = req.body;
   const db = readDB();
 
-  if (pin !== db.settings.teacherPin) {
+  if (!checkTeacherPin(pin, db.settings.teacherPin)) {
     return res.status(401).json({ success: false, message: '권한이 없습니다.' });
   }
 

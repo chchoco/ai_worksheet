@@ -35,12 +35,12 @@ export interface UnitGroup {
 export interface ClassSettings {
   schoolName: string;
   teacherName: string;
-  className: string; // e.g. "3학년 2반 과학수업"
+  className: string; // e.g. "2학년 2학기"
   subject: string;
   announcement: string;
   allowDirectDownload: boolean;
-  themeColor: 'indigo' | 'emerald' | 'blue' | 'rose' | 'amber';
-  teacherPinHash: string; // Stored securely
+  themeColor: 'indigo' | 'emerald' | 'blue' | 'rose' | 'amber' | string;
+  teacherPinHash?: string; // Stored securely on server
 }
 
 export type ViewMode = 'all' | 'unit' | 'detail';

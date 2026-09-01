@@ -54,6 +54,7 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
   initialTab = 'upload',
 }) => {
   const [pinInput, setPinInput] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
   const [pinError, setPinError] = useState<string>('');
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'upload' | 'manage' | 'settings'>(initialTab);
@@ -61,7 +62,7 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
   // Form State for New / Edit Worksheet
   const [editingId, setEditingId] = useState<string | null>(null);
   const [unitMode, setUnitMode] = useState<'select' | 'new'>('select');
-  const [selectedUnit, setSelectedUnit] = useState<string>(existingUnits[0] || '1단원. 물질의 구성');
+  const [selectedUnit, setSelectedUnit] = useState<string>(existingUnits[0] || '1단원. 인공지능의 이해');
   const [newUnitTitle, setNewUnitTitle] = useState<string>('');
   const [lessonNumber, setLessonNumber] = useState<string>('1차시');
   const [title, setTitle] = useState<string>('');
@@ -78,10 +79,10 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
   const [isImportant, setIsImportant] = useState<boolean>(false);
 
   // Settings form state
-  const [schoolName, setSchoolName] = useState<string>(settings?.schoolName || '');
-  const [teacherName, setTeacherName] = useState<string>(settings?.teacherName || '');
-  const [className, setClassName] = useState<string>(settings?.className || '');
-  const [subject, setSubject] = useState<string>(settings?.subject || '');
+  const [schoolName, setSchoolName] = useState<string>(settings?.schoolName || '전남여자고등학교');
+  const [teacherName, setTeacherName] = useState<string>(settings?.teacherName || '정보선생님');
+  const [className, setClassName] = useState<string>(settings?.className || '2학년 2학기');
+  const [subject, setSubject] = useState<string>(settings?.subject || '인공지능 기초');
   const [announcement, setAnnouncement] = useState<string>(settings?.announcement || '');
   const [newPin, setNewPin] = useState<string>('');
 
@@ -89,17 +90,48 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Sync settings when props change or modal opens
+  React.useEffect(() => {
+    if (settings) {
+      setSchoolName(settings.schoolName || '전남여자고등학교');
+      setTeacherName(settings.teacherName || '정보선생님');
+      setClassName(settings.className || '2학년 2학기');
+      setSubject(settings.subject || '인공지능 기초');
+      setAnnouncement(settings.announcement || '');
+    }
+  }, [settings, isOpen]);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      setActiveTab(initialTab);
+      setPinError('');
+      setFeedbackMsg(null);
+    }
+  }, [isOpen, initialTab]);
+
+  React.useEffect(() => {
+    if (existingUnits.length > 0 && !selectedUnit) {
+      setSelectedUnit(existingUnits[0]);
+    }
+  }, [existingUnits, selectedUnit]);
+
   if (!isOpen) return null;
 
   // Handle PIN authentication
   const handlePinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!pinInput.trim()) return;
     setIsVerifying(true);
     setPinError('');
-    const success = await onAuthenticate(pinInput);
+    const cleanPin = pinInput.trim();
+    const success = await onAuthenticate(cleanPin);
     setIsVerifying(false);
     if (!success) {
-      setPinError('비밀번호가 일치하지 않습니다.');
+      setPinError('비밀번호가 일치하지 않습니다. (기본 비밀번호: 5480 또는 5480!!)');
+    } else {
+      setPinInput('');
+      setFeedbackMsg({ type: 'success', text: '선생님 인증이 완료되었습니다.' });
+      setTimeout(() => setFeedbackMsg(null), 2500);
     }
   };
 
@@ -273,25 +305,45 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
 
             <form onSubmit={handlePinSubmit} className="space-y-4">
               <div>
-                <input
-                  type="password"
-                  id="teacher-pin-input"
-                  value={pinInput}
-                  onChange={e => setPinInput(e.target.value)}
-                  placeholder="선생님 비밀번호 입력"
-                  className="w-full text-center tracking-widest text-lg font-bold py-3 px-4 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none"
-                  autoFocus
-                />
-                {pinError && <p className="text-xs text-rose-600 mt-2 font-medium">{pinError}</p>}
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    id="teacher-pin-input"
+                    value={pinInput}
+                    onChange={e => setPinInput(e.target.value)}
+                    placeholder="비밀번호 입력 (예: 5480!!)"
+                    className="w-full text-center tracking-wider text-base sm:text-lg font-bold py-3 pl-4 pr-12 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 transition-colors"
+                    title={showPassword ? '비밀번호 숨기기' : '비밀번호 보기'}
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
+                <div className="flex items-center justify-between mt-2 text-xs">
+                  <span className="text-slate-400">초기 비밀번호: <strong className="text-slate-600 font-semibold">5480!!</strong> 또는 <strong className="text-slate-600 font-semibold">5480</strong></span>
+                </div>
+                {pinError && <p className="text-xs text-rose-600 mt-2 font-medium text-left">{pinError}</p>}
               </div>
 
               <button
                 type="submit"
                 id="btn-submit-teacher-auth"
-                disabled={isVerifying || !pinInput}
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold shadow-md transition-all"
+                disabled={isVerifying || !pinInput.trim()}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
               >
-                {isVerifying ? '확인 중...' : '교사 모드 입장하기'}
+                {isVerifying ? (
+                  <span>인증 확인 중...</span>
+                ) : (
+                  <>
+                    <Unlock className="w-4 h-4" />
+                    <span>교사 모드 입장하기</span>
+                  </>
+                )}
               </button>
             </form>
           </div>
