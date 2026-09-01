@@ -1,0 +1,6 @@
+{
+  "name": "학습지 공유 센터",
+  "description": "선생님이 단원 및 차시별로 학습지를 업로드하고, 학생들은 링크를 통해 손쉽게 PDF 학습지를 열람, 다운로드, 인쇄할 수 있는 수업 지원 플랫폼",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
