@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 
 const app = express();
@@ -12,11 +13,32 @@ app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 // Data storage directory
 const DATA_DIR = path.join(process.cwd(), 'data');
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+// Multer Disk Storage for PDFs
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, UPLOADS_DIR);
+  },
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.pdf';
+    const uniqueName = `pdf-${Date.now()}-${Math.random().toString(36).substring(2, 8)}${ext}`;
+    cb(null, uniqueName);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
+});
 
 interface Worksheet {
   id: string;
@@ -286,6 +308,66 @@ app.post('/api/worksheets/:id/download', (req, res) => {
   res.json({ success: true, downloadCount: item?.downloadCount || 0 });
 });
 
+// 7.1. Direct PDF Upload via Multer
+app.post('/api/upload-pdf', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'PDF 파일이 전달되지 않았습니다.' });
+    }
+
+    const fileId = path.parse(req.file.filename).name;
+    const fileUrl = `/api/pdf/${fileId}`;
+
+    res.json({
+      success: true,
+      fileId,
+      fileUrl,
+      fileName: req.file.originalname,
+      fileSizeBytes: req.file.size,
+    });
+  } catch (err: any) {
+    console.error('File upload error:', err);
+    res.status(500).json({ success: false, message: '파일 업로드 처리 중 오류가 발생했습니다.' });
+  }
+});
+
+// 7.2. Stream PDF Content by ID or Filename
+app.get('/api/pdf/:id', (req, res) => {
+  const { id } = req.params;
+  const cleanId = id.replace(/\.pdf$/, '');
+
+  // 1. Check in uploads folder
+  const possiblePaths = [
+    path.join(UPLOADS_DIR, `${cleanId}.pdf`),
+    path.join(UPLOADS_DIR, cleanId),
+  ];
+
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename="worksheet.pdf"');
+      return res.sendFile(p);
+    }
+  }
+
+  // 2. Check in DB worksheets
+  const db = readDB();
+  const item = db.worksheets.find(w => w.id === cleanId || w.id === id);
+  if (item && item.pdfDataUrl && item.pdfDataUrl.startsWith('data:application/pdf;base64,')) {
+    const base64Data = item.pdfDataUrl.replace(/^data:application\/pdf;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(item.pdfFileName || 'worksheet.pdf')}"`);
+    return res.send(buffer);
+  }
+
+  // 3. Fallback sample PDF
+  const fallback = samplePdfTemplate1.replace(/^data:application\/pdf;base64,/, '');
+  const buffer = Buffer.from(fallback, 'base64');
+  res.setHeader('Content-Type', 'application/pdf');
+  return res.send(buffer);
+});
+
 // 8. Create new Worksheet (Teacher)
 app.post('/api/worksheets', (req, res) => {
   const { pin, worksheet } = req.body;
@@ -300,8 +382,25 @@ app.post('/api/worksheets', (req, res) => {
   }
 
   const now = new Date().toISOString();
+  const wsId = `ws-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+
+  let finalPdfDataUrl = worksheet.pdfDataUrl || `/api/pdf/${wsId}`;
+
+  // If base64 was sent, save to disk to keep db.json small and prevent payload overflow
+  if (worksheet.pdfDataUrl && worksheet.pdfDataUrl.startsWith('data:application/pdf;base64,')) {
+    try {
+      const base64Data = worksheet.pdfDataUrl.replace(/^data:application\/pdf;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+      const filePath = path.join(UPLOADS_DIR, `${wsId}.pdf`);
+      fs.writeFileSync(filePath, buffer);
+      finalPdfDataUrl = `/api/pdf/${wsId}`;
+    } catch (saveErr) {
+      console.warn('Could not write uploaded pdf buffer to disk:', saveErr);
+    }
+  }
+
   const newWorksheet: Worksheet = {
-    id: `ws-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+    id: wsId,
     unitId: worksheet.unitId || `unit-${encodeURIComponent(worksheet.unitTitle)}`,
     unitTitle: worksheet.unitTitle.trim(),
     lessonNumber: worksheet.lessonNumber.trim(),
@@ -312,7 +411,7 @@ app.post('/api/worksheets', (req, res) => {
     description: worksheet.description || '',
     keyPoints: worksheet.keyPoints || [],
     pdfFileName: worksheet.pdfFileName || `${worksheet.lessonNumber}_${worksheet.title}.pdf`,
-    pdfDataUrl: worksheet.pdfDataUrl || samplePdfTemplate1,
+    pdfDataUrl: finalPdfDataUrl,
     fileSizeBytes: worksheet.fileSizeBytes || 250000,
     pageCount: worksheet.pageCount || 2,
     hasAnswerSheet: !!worksheet.hasAnswerSheet,

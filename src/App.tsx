@@ -259,16 +259,19 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: pinToUse, worksheet: wsData }),
       });
-      const data = await res.json();
-      if (data.success && data.worksheet) {
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && data.success && data.worksheet) {
         setWorksheets(prev => [data.worksheet, ...prev]);
         setSelectedWorksheetId(data.worksheet.id);
         return { success: true };
       }
-      return { success: false, message: data.message || '서버 저장에 실패했습니다.' };
+      return {
+        success: false,
+        message: data?.message || (res.status === 413 ? '파일 크기가 너무 큽니다. (100MB 이하로 업로드해주세요)' : '학습지 저장에 실패했습니다.'),
+      };
     } catch (err: any) {
       console.error('Error adding worksheet:', err);
-      return { success: false, message: '네트워크 연결 또는 파일 크기를 확인해주세요.' };
+      return { success: false, message: '네트워크 연결 상태를 확인해주세요.' };
     }
   };
 
@@ -281,12 +284,15 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: pinToUse, updates }),
       });
-      const data = await res.json();
-      if (data.success && data.worksheet) {
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && data.success && data.worksheet) {
         setWorksheets(prev => prev.map(w => (w.id === id ? data.worksheet : w)));
         return { success: true };
       }
-      return { success: false, message: data.message || '서버 수정에 실패했습니다.' };
+      return {
+        success: false,
+        message: data?.message || '학습지 수정에 실패했습니다.',
+      };
     } catch (err: any) {
       console.error('Error updating worksheet:', err);
       return { success: false, message: '수정 중 오류가 발생했습니다.' };

@@ -223,7 +223,7 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
             className="w-full transition-transform duration-150 origin-top flex flex-col items-center"
             style={{ transform: `scale(${zoomLevel / 100})` }}
           >
-            {viewFormat === 'pdf-embed' && worksheet.pdfDataUrl.startsWith('data:application/pdf') ? (
+            {viewFormat === 'pdf-embed' && worksheet.pdfDataUrl ? (
               <div className="w-full max-w-4xl h-[850px] bg-white rounded-2xl shadow-lg border border-slate-200 overflow-hidden">
                 <iframe
                   src={`${worksheet.pdfDataUrl}#toolbar=1&navpanes=0`}

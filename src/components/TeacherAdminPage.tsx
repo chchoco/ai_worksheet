@@ -131,7 +131,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
   };
 
   // Process File helper (used by both input change and drag&drop)
-  const processPdfFile = (file: File) => {
+  const processPdfFile = async (file: File) => {
     if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
       setFeedbackMsg({ type: 'error', text: 'PDF 형식(.pdf)의 파일만 업로드할 수 있습니다.' });
       return;
@@ -140,6 +140,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     setPdfFileName(file.name);
     setFileSizeBytes(file.size);
     setIsReadingFile(true);
+    setFeedbackMsg(null);
 
     // Auto fill title if empty
     if (!title) {
@@ -147,11 +148,44 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
       setTitle(cleanTitle);
     }
 
+    try {
+      // 1. First attempt: Direct multipart upload to backend (fast and supports large files up to 100MB)
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch('/api/upload-pdf', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.fileUrl) {
+          setPdfDataUrl(data.fileUrl);
+          setPdfFileName(data.fileName || file.name);
+          setFileSizeBytes(data.fileSizeBytes || file.size);
+          setIsReadingFile(false);
+          setFeedbackMsg({
+            type: 'success',
+            text: `✅ ${file.name} (${formatBytes(file.size)}) 파일이 성공적으로 준비되었습니다!`,
+          });
+          return;
+        }
+      }
+    } catch (uploadErr) {
+      console.warn('Multipart upload fallback to base64 reader:', uploadErr);
+    }
+
+    // 2. Fallback: Local FileReader as Base64 Data URL
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
         setPdfDataUrl(event.target.result as string);
         setIsReadingFile(false);
+        setFeedbackMsg({
+          type: 'success',
+          text: `✅ ${file.name} (${formatBytes(file.size)}) 파일이 준비되었습니다!`,
+        });
       }
     };
     reader.onerror = () => {

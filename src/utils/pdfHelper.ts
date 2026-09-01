@@ -22,12 +22,26 @@ export function formatDate(dateString: string): string {
 }
 
 /**
- * Triggers browser download for a PDF data URL or Blob
+ * Triggers browser download for a PDF URL, data URL, or Blob
  */
 export function downloadFile(dataUrl: string, fileName: string) {
+  const finalFileName = fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`;
+  
+  if (dataUrl.startsWith('data:')) {
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = finalFileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return;
+  }
+
+  // If it is a backend streaming URL (/api/pdf/...)
   const link = document.createElement('a');
   link.href = dataUrl;
-  link.download = fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`;
+  link.download = finalFileName;
+  link.target = '_blank';
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
