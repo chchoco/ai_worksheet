@@ -327,7 +327,7 @@ export default function App() {
   };
 
   // Teacher Update Settings
-  const handleUpdateSettings = async (newSettings: Partial<ClassSettings>, newPin?: string): Promise<boolean> => {
+  const handleUpdateSettings = async (newSettings: Partial<ClassSettings>, newPin?: string): Promise<{ success: boolean; message?: string }> => {
     try {
       const pinToUse = getActiveTeacherPin();
       const res = await fetch('/api/teacher/settings', {
@@ -339,19 +339,19 @@ export default function App() {
           newPin,
         }),
       });
-      const data = await res.json();
-      if (data.success) {
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && data.success) {
         setSettings(data.settings);
         if (newPin) {
           setTeacherPin(newPin);
           sessionStorage.setItem('teacher_cached_pin', newPin);
           localStorage.setItem('teacher_cached_pin', newPin);
         }
-        return true;
+        return { success: true };
       }
-      return false;
+      return { success: false, message: data?.message || '설정 저장 중 오류가 발생했습니다.' };
     } catch {
-      return false;
+      return { success: false, message: '네트워크 연결 상태를 확인해주세요.' };
     }
   };
 

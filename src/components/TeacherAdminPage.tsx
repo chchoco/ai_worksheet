@@ -38,7 +38,7 @@ interface TeacherAdminPageProps {
   onAddWorksheet: (wsData: Partial<Worksheet>) => Promise<{ success: boolean; message?: string } | boolean>;
   onUpdateWorksheet: (id: string, updates: Partial<Worksheet>) => Promise<{ success: boolean; message?: string } | boolean>;
   onDeleteWorksheet: (id: string) => Promise<boolean>;
-  onUpdateSettings: (newSettings: Partial<ClassSettings>, newPin?: string) => Promise<boolean>;
+  onUpdateSettings: (newSettings: Partial<ClassSettings>, newPin?: string) => Promise<{ success: boolean; message?: string } | boolean>;
   onResetSample: () => Promise<boolean>;
   worksheets: Worksheet[];
   existingUnits: string[];
@@ -343,7 +343,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     e.preventDefault();
     setIsSubmitting(true);
 
-    const success = await onUpdateSettings(
+    const result = await onUpdateSettings(
       {
         schoolName,
         teacherName,
@@ -356,12 +356,15 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
 
     setIsSubmitting(false);
 
-    if (success) {
-      setFeedbackMsg({ type: 'success', text: '설정이 성공적으로 저장되었습니다.' });
+    const isSuccess = typeof result === 'boolean' ? result : !!result?.success;
+    const errorMsg = typeof result === 'object' && result?.message ? result.message : '설정 저장 중 오류가 발생했습니다.';
+
+    if (isSuccess) {
+      setFeedbackMsg({ type: 'success', text: '🎉 환경 설정이 성공적으로 저장되었습니다.' });
       setNewPin('');
-      setTimeout(() => setFeedbackMsg(null), 3000);
+      setTimeout(() => setFeedbackMsg(null), 3500);
     } else {
-      setFeedbackMsg({ type: 'error', text: '설정 저장 중 오류가 발생했습니다.' });
+      setFeedbackMsg({ type: 'error', text: errorMsg });
     }
   };
 
