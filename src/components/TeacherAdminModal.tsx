@@ -27,8 +27,8 @@ interface TeacherAdminModalProps {
   onClose: () => void;
   isTeacherMode: boolean;
   onAuthenticate: (pin: string) => Promise<boolean>;
-  onAddWorksheet: (wsData: Partial<Worksheet>) => Promise<boolean>;
-  onUpdateWorksheet: (id: string, updates: Partial<Worksheet>) => Promise<boolean>;
+  onAddWorksheet: (wsData: Partial<Worksheet>) => Promise<{ success: boolean; message?: string } | boolean>;
+  onUpdateWorksheet: (id: string, updates: Partial<Worksheet>) => Promise<{ success: boolean; message?: string } | boolean>;
   onDeleteWorksheet: (id: string) => Promise<boolean>;
   onUpdateSettings: (newSettings: Partial<ClassSettings>, newPin?: string) => Promise<boolean>;
   onResetSample: () => Promise<boolean>;
@@ -77,6 +77,10 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
   const [answerSheetText, setAnswerSheetText] = useState<string>('');
   const [showAnswerSheetToStudents, setShowAnswerSheetToStudents] = useState<boolean>(true);
   const [isImportant, setIsImportant] = useState<boolean>(false);
+
+  // Drag and drop & reading states
+  const [isDraggingFile, setIsDraggingFile] = useState<boolean>(false);
+  const [isReadingFile, setIsReadingFile] = useState<boolean>(false);
 
   // Settings form state
   const [schoolName, setSchoolName] = useState<string>(settings?.schoolName || '전남여자고등학교');
@@ -127,7 +131,7 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
     const success = await onAuthenticate(cleanPin);
     setIsVerifying(false);
     if (!success) {
-      setPinError('비밀번호가 일치하지 않습니다. (기본 비밀번호: 5480 또는 5480!!)');
+      setPinError('비밀번호가 일치하지 않습니다.');
     } else {
       setPinInput('');
       setFeedbackMsg({ type: 'success', text: '선생님 인증이 완료되었습니다.' });
@@ -135,13 +139,16 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
     }
   };
 
-  // Handle PDF file upload (read as base64 data URL)
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Process File helper (used by both input change and drag&drop)
+  const processPdfFile = (file: File) => {
+    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
+      setFeedbackMsg({ type: 'error', text: 'PDF 형식(.pdf)의 파일만 업로드할 수 있습니다.' });
+      return;
+    }
 
     setPdfFileName(file.name);
     setFileSizeBytes(file.size);
+    setIsReadingFile(true);
 
     // Auto fill title if empty
     if (!title) {
@@ -153,9 +160,46 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
     reader.onload = (event) => {
       if (event.target?.result) {
         setPdfDataUrl(event.target.result as string);
+        setIsReadingFile(false);
       }
     };
+    reader.onerror = () => {
+      setIsReadingFile(false);
+      setFeedbackMsg({ type: 'error', text: 'PDF 파일을 읽는 중 오류가 발생했습니다.' });
+    };
     reader.readAsDataURL(file);
+  };
+
+  // Handle PDF file upload
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processPdfFile(file);
+    }
+  };
+
+  // Drag and Drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      processPdfFile(file);
+    }
   };
 
   const handleAddKeyPoint = () => {
@@ -182,6 +226,11 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
       return;
     }
 
+    if (isReadingFile) {
+      setFeedbackMsg({ type: 'error', text: 'PDF 파일을 처리 중입니다. 잠시만 기다려주세요.' });
+      return;
+    }
+
     setIsSubmitting(true);
     const payload: Partial<Worksheet> = {
       unitTitle: finalUnit,
@@ -200,16 +249,19 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
       isImportant,
     };
 
-    let success = false;
+    let result: { success: boolean; message?: string } | boolean = false;
     if (editingId) {
-      success = await onUpdateWorksheet(editingId, payload);
+      result = await onUpdateWorksheet(editingId, payload);
     } else {
-      success = await onAddWorksheet(payload);
+      result = await onAddWorksheet(payload);
     }
 
     setIsSubmitting(false);
 
-    if (success) {
+    const isSuccess = typeof result === 'boolean' ? result : result.success;
+    const errorMessage = typeof result === 'object' && result.message ? result.message : '저장 중 오류가 발생했습니다.';
+
+    if (isSuccess) {
       setFeedbackMsg({
         type: 'success',
         text: editingId ? '학습지가 성공적으로 수정되었습니다.' : '새 학습지가 등록되었습니다!',
@@ -225,7 +277,7 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
       setTimeout(() => setFeedbackMsg(null), 3000);
       setActiveTab('manage');
     } else {
-      setFeedbackMsg({ type: 'error', text: '저장 중 오류가 발생했습니다.' });
+      setFeedbackMsg({ type: 'error', text: errorMessage });
     }
   };
 
@@ -311,7 +363,7 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
                     id="teacher-pin-input"
                     value={pinInput}
                     onChange={e => setPinInput(e.target.value)}
-                    placeholder="비밀번호 입력 (예: 5480!!)"
+                    placeholder="비밀번호 입력"
                     className="w-full text-center tracking-wider text-base sm:text-lg font-bold py-3 pl-4 pr-12 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none"
                     autoFocus
                   />
@@ -323,9 +375,6 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
                   >
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
-                </div>
-                <div className="flex items-center justify-between mt-2 text-xs">
-                  <span className="text-slate-400">초기 비밀번호: <strong className="text-slate-600 font-semibold">5480!!</strong> 또는 <strong className="text-slate-600 font-semibold">5480</strong></span>
                 </div>
                 {pinError && <p className="text-xs text-rose-600 mt-2 font-medium text-left">{pinError}</p>}
               </div>
@@ -422,7 +471,14 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
                     </label>
                     <div
                       onClick={() => fileInputRef.current?.click()}
-                      className="border-2 border-dashed border-indigo-200 hover:border-indigo-500 bg-indigo-50/40 hover:bg-indigo-50/80 rounded-2xl p-6 text-center cursor-pointer transition-all"
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                      className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
+                        isDraggingFile
+                          ? 'border-indigo-600 bg-indigo-100/70 scale-[1.01]'
+                          : 'border-indigo-200 hover:border-indigo-500 bg-indigo-50/40 hover:bg-indigo-50/80'
+                      }`}
                     >
                       <input
                         type="file"
@@ -431,13 +487,18 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
                         onChange={handleFileUpload}
                         className="hidden"
                       />
-                      <Upload className="w-8 h-8 text-indigo-600 mx-auto mb-2" />
-                      {pdfFileName ? (
+                      <Upload className={`w-8 h-8 mx-auto mb-2 transition-transform ${isDraggingFile ? 'scale-110 text-indigo-700' : 'text-indigo-600'}`} />
+                      {isReadingFile ? (
+                        <div>
+                          <p className="text-xs font-bold text-indigo-700 animate-pulse">PDF 파일을 처리하는 중입니다...</p>
+                          <p className="text-[11px] text-slate-500 mt-1">잠시만 기다려주세요.</p>
+                        </div>
+                      ) : pdfFileName ? (
                         <div>
                           <p className="text-xs font-bold text-slate-900">{pdfFileName}</p>
                           <p className="text-[11px] text-slate-500 mt-0.5">{formatBytes(fileSizeBytes)}</p>
-                          <span className="inline-block mt-2 text-[11px] bg-indigo-600 text-white font-semibold px-2 py-0.5 rounded">
-                            파일 교체하기
+                          <span className="inline-block mt-2 text-[11px] bg-indigo-600 text-white font-semibold px-2.5 py-0.5 rounded-lg shadow-xs">
+                            다른 PDF로 변경하기
                           </span>
                         </div>
                       ) : (
@@ -446,7 +507,7 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
                             여기를 클릭하거나 PDF 파일을 끌어다 놓으세요
                           </p>
                           <p className="text-[11px] text-slate-500 mt-1">
-                            (PDF 파일이 없어도 기본 인쇄 양식으로 자동 생성됩니다)
+                            (PDF 파일 첨부 시 원본 파일 그대로 뷰어 및 다운로드에 제공됩니다)
                           </p>
                         </div>
                       )}
@@ -464,7 +525,7 @@ export const TeacherAdminModal: React.FC<TeacherAdminModalProps> = ({
                           onClick={() => setUnitMode(unitMode === 'select' ? 'new' : 'select')}
                           className="text-[11px] text-indigo-600 font-semibold hover:underline"
                         >
-                          {unitMode === 'select' ? '+ 새 단원 입력' : '기존 단원 선택'}
+                          {unitMode === 'select' ? '+ 직접 새 단원 입력' : '목록에서 단원 선택'}
                         </button>
                       </div>
 

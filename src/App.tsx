@@ -5,6 +5,7 @@ import { WorksheetViewer } from './components/WorksheetViewer';
 import { ShareModal } from './components/ShareModal';
 import { TeacherAdminModal } from './components/TeacherAdminModal';
 import { Worksheet, ClassSettings } from './types';
+import { DEFAULT_AI_UNITS } from './data/defaultUnits';
 
 const DEFAULT_SETTINGS: ClassSettings = {
   schoolName: '전남여자고등학교',
@@ -223,42 +224,55 @@ export default function App() {
     localStorage.removeItem('teacher_cached_pin');
   };
 
+  const getActiveTeacherPin = () => {
+    return (
+      teacherPin ||
+      sessionStorage.getItem('teacher_cached_pin') ||
+      localStorage.getItem('teacher_cached_pin') ||
+      '5480!!'
+    );
+  };
+
   // Teacher Add Worksheet
-  const handleAddWorksheet = async (wsData: Partial<Worksheet>): Promise<boolean> => {
+  const handleAddWorksheet = async (wsData: Partial<Worksheet>): Promise<{ success: boolean; message?: string }> => {
     try {
+      const pinToUse = getActiveTeacherPin();
       const res = await fetch('/api/worksheets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: teacherPin || '5480!!', worksheet: wsData }),
+        body: JSON.stringify({ pin: pinToUse, worksheet: wsData }),
       });
       const data = await res.json();
       if (data.success && data.worksheet) {
         setWorksheets(prev => [data.worksheet, ...prev]);
         setSelectedWorksheetId(data.worksheet.id);
-        return true;
+        return { success: true };
       }
-      return false;
-    } catch {
-      return false;
+      return { success: false, message: data.message || '서버 저장에 실패했습니다.' };
+    } catch (err: any) {
+      console.error('Error adding worksheet:', err);
+      return { success: false, message: '네트워크 연결 또는 파일 크기를 확인해주세요.' };
     }
   };
 
   // Teacher Update Worksheet
-  const handleUpdateWorksheet = async (id: string, updates: Partial<Worksheet>): Promise<boolean> => {
+  const handleUpdateWorksheet = async (id: string, updates: Partial<Worksheet>): Promise<{ success: boolean; message?: string }> => {
     try {
+      const pinToUse = getActiveTeacherPin();
       const res = await fetch(`/api/worksheets/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: teacherPin || '5480!!', updates }),
+        body: JSON.stringify({ pin: pinToUse, updates }),
       });
       const data = await res.json();
       if (data.success && data.worksheet) {
         setWorksheets(prev => prev.map(w => (w.id === id ? data.worksheet : w)));
-        return true;
+        return { success: true };
       }
-      return false;
-    } catch {
-      return false;
+      return { success: false, message: data.message || '서버 수정에 실패했습니다.' };
+    } catch (err: any) {
+      console.error('Error updating worksheet:', err);
+      return { success: false, message: '수정 중 오류가 발생했습니다.' };
     }
   };
 
@@ -266,10 +280,11 @@ export default function App() {
   const handleDeleteWorksheet = async (id: string): Promise<boolean> => {
     if (!window.confirm('정말 이 학습지를 삭제하시겠습니까?')) return false;
     try {
+      const pinToUse = getActiveTeacherPin();
       const res = await fetch(`/api/worksheets/${id}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: teacherPin || '5480!!' }),
+        body: JSON.stringify({ pin: pinToUse }),
       });
       const data = await res.json();
       if (data.success) {
@@ -296,11 +311,12 @@ export default function App() {
   // Teacher Update Settings
   const handleUpdateSettings = async (newSettings: Partial<ClassSettings>, newPin?: string): Promise<boolean> => {
     try {
+      const pinToUse = getActiveTeacherPin();
       const res = await fetch('/api/teacher/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pin: teacherPin || '5480!!',
+          pin: pinToUse,
           newSettings,
           newPin,
         }),
@@ -311,6 +327,7 @@ export default function App() {
         if (newPin) {
           setTeacherPin(newPin);
           sessionStorage.setItem('teacher_cached_pin', newPin);
+          localStorage.setItem('teacher_cached_pin', newPin);
         }
         return true;
       }
@@ -324,10 +341,11 @@ export default function App() {
   const handleResetSample = async (): Promise<boolean> => {
     if (!window.confirm('기본 샘플 데이터로 복원하시겠습니까? 기존 변경 내용은 초기화됩니다.')) return false;
     try {
+      const pinToUse = getActiveTeacherPin();
       const res = await fetch('/api/teacher/reset-sample', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: teacherPin || '5480!!' }),
+        body: JSON.stringify({ pin: pinToUse }),
       });
       const data = await res.json();
       if (data.success) {
@@ -353,7 +371,8 @@ export default function App() {
   });
 
   const selectedWorksheet = worksheets.find(w => w.id === selectedWorksheetId) || worksheets[0] || null;
-  const existingUnits = Array.from(new Set(worksheets.map(w => w.unitTitle))).filter(Boolean);
+  // Always include all 4 official units plus any custom units from worksheets
+  const existingUnits = Array.from(new Set([...DEFAULT_AI_UNITS, ...worksheets.map(w => w.unitTitle)])).filter(Boolean);
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-100 text-slate-800">

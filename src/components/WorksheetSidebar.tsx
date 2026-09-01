@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, FileText, CheckCircle, Circle, Star, Plus, Eye, Download, Layers, Sparkles } from 'lucide-react';
 import { Worksheet } from '../types';
+import { DEFAULT_AI_UNITS } from '../data/defaultUnits';
 
 interface WorksheetSidebarProps {
   worksheets: Worksheet[];
@@ -21,15 +22,24 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
   selectedUnitFilter,
   onSelectUnitFilter,
 }) => {
+  // Combine official default units with any custom units from worksheets
+  const allKnownUnits = Array.from(
+    new Set([...DEFAULT_AI_UNITS, ...worksheets.map(w => w.unitTitle)])
+  ).filter(Boolean);
+
   // Group worksheets by Unit
-  const unitsMap = worksheets.reduce((acc, ws) => {
-    const key = ws.unitTitle || '기타 학습 자료';
-    if (!acc[key]) {
-      acc[key] = [];
-    }
-    acc[key].push(ws);
+  const unitsMap = allKnownUnits.reduce((acc, unit) => {
+    acc[unit] = worksheets.filter(ws => ws.unitTitle === unit);
     return acc;
   }, {} as Record<string, Worksheet[]>);
+
+  // Add any other uncategorized units if present in worksheets
+  worksheets.forEach(ws => {
+    const key = ws.unitTitle || '기타 학습 자료';
+    if (!unitsMap[key]) {
+      unitsMap[key] = [ws];
+    }
+  });
 
   const unitTitles = Object.keys(unitsMap);
 
@@ -64,10 +74,10 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
           onChange={e => onSelectUnitFilter(e.target.value)}
           className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
-          <option value="all">전체 단원 보기 ({worksheets.length})</option>
+          <option value="all">전체 단원 보기 (총 {worksheets.length}개 차시)</option>
           {unitTitles.map(unit => (
             <option key={unit} value={unit}>
-              {unit} ({unitsMap[unit].length})
+              {unit} ({unitsMap[unit]?.length || 0}차시)
             </option>
           ))}
         </select>
@@ -77,7 +87,7 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
           <button
             id="btn-sidebar-quick-upload"
             onClick={onOpenTeacherUpload}
-            className="mt-2.5 w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-xs"
+            className="mt-2.5 w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
             새 차시 학습지 등록
@@ -87,49 +97,60 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
 
       {/* List of Units and Lessons */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {unitTitles.length === 0 ? (
-          <div className="text-center py-10 px-4 text-slate-400">
-            <FileText className="w-8 h-8 mx-auto mb-2 stroke-[1.5] text-slate-300" />
-            <p className="text-xs">등록된 학습지가 없습니다.</p>
-            {isTeacherMode && (
+        {unitTitles.map(unit => {
+          const isCollapsed = collapsedUnits[unit];
+          const unitWorksheets = unitsMap[unit] || [];
+          const hasWorksheets = unitWorksheets.length > 0;
+
+          // If filtering by a specific unit and this isn't it, hide it
+          if (selectedUnitFilter !== 'all' && selectedUnitFilter !== unit) {
+            return null;
+          }
+
+          return (
+            <div key={unit} className="bg-slate-50/50 rounded-xl border border-slate-200/80 overflow-hidden">
+              {/* Unit Header Accordion */}
               <button
-                onClick={onOpenTeacherUpload}
-                className="mt-3 text-xs text-indigo-600 font-semibold hover:underline"
+                type="button"
+                onClick={() => toggleUnit(unit)}
+                className="w-full px-3 py-2.5 flex items-center justify-between bg-slate-100/70 hover:bg-slate-200/60 transition-colors text-left"
               >
-                첫 학습지 등록하기
-              </button>
-            )}
-          </div>
-        ) : (
-          unitTitles.map(unit => {
-            const isCollapsed = collapsedUnits[unit];
-            const unitWorksheets = unitsMap[unit];
-
-            return (
-              <div key={unit} className="bg-slate-50/50 rounded-xl border border-slate-200/80 overflow-hidden">
-                {/* Unit Header Accordion */}
-                <button
-                  type="button"
-                  onClick={() => toggleUnit(unit)}
-                  className="w-full px-3 py-2.5 flex items-center justify-between bg-slate-100/70 hover:bg-slate-200/60 transition-colors text-left"
+                <div className="flex items-center gap-2 min-w-0">
+                  {isCollapsed ? (
+                    <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-slate-600 shrink-0" />
+                  )}
+                  <span className="text-xs font-bold text-slate-800 truncate">{unit}</span>
+                </div>
+                <span
+                  className={`text-[11px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ml-2 ${
+                    hasWorksheets
+                      ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+                      : 'text-slate-400 bg-white border-slate-200'
+                  }`}
                 >
-                  <div className="flex items-center gap-2 min-w-0">
-                    {isCollapsed ? (
-                      <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-slate-600 shrink-0" />
-                    )}
-                    <span className="text-xs font-bold text-slate-800 truncate">{unit}</span>
-                  </div>
-                  <span className="text-[11px] font-semibold text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200 shrink-0 ml-2">
-                    {unitWorksheets.length}차시
-                  </span>
-                </button>
+                  {unitWorksheets.length}차시
+                </span>
+              </button>
 
-                {/* Lessons in this unit */}
-                {!isCollapsed && (
-                  <div className="p-1.5 space-y-1 bg-white">
-                    {unitWorksheets.map(ws => {
+              {/* Lessons in this unit */}
+              {!isCollapsed && (
+                <div className="p-1.5 space-y-1 bg-white">
+                  {!hasWorksheets ? (
+                    <div className="py-3 px-2 text-center text-slate-400 text-[11px]">
+                      <p>아직 등록된 학습지가 없습니다.</p>
+                      {isTeacherMode && (
+                        <button
+                          onClick={onOpenTeacherUpload}
+                          className="mt-1 text-[11px] text-indigo-600 font-bold hover:underline inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> 이 단원에 학습지 등록
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    unitWorksheets.map(ws => {
                       const isSelected = ws.id === selectedWorksheetId;
 
                       return (
@@ -183,13 +204,13 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
                           </div>
                         </div>
                       );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Footer Info */}
