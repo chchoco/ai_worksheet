@@ -14,12 +14,12 @@ export const ShareModal: React.FC<ShareModalProps> = ({ worksheet, isOpen, onClo
   const [copied, setCopied] = useState<boolean>(false);
   const [isBigScreenMode, setIsBigScreenMode] = useState<boolean>(false);
 
-  if (!isOpen || !worksheet) return null;
-
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-  const shareLink = `${currentOrigin}?worksheet=${worksheet.id}`;
+  const shareLink = worksheet ? `${currentOrigin}?worksheet=${worksheet.id}` : '';
 
   useEffect(() => {
+    if (!isOpen || !shareLink) return;
+
     QRCode.toDataURL(shareLink, {
       width: 320,
       margin: 2,
@@ -30,7 +30,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({ worksheet, isOpen, onClo
     })
       .then(url => setQrUrl(url))
       .catch(err => console.error('QR code generation error:', err));
-  }, [shareLink]);
+  }, [shareLink, isOpen]);
+
+  if (!isOpen || !worksheet) return null;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(shareLink);
