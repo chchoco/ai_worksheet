@@ -286,6 +286,32 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     }
   };
 
+  // Quick Replace PDF directly from list
+  const handleQuickReplacePdf = async (wsId: string, file: File) => {
+    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
+      setFeedbackMsg({ type: 'error', text: 'PDF 형식(.pdf)의 파일만 업로드할 수 있습니다.' });
+      return;
+    }
+    setFeedbackMsg({ type: 'success', text: `⏳ ${file.name} (${formatBytes(file.size)}) 파일 업로드 중...` });
+    const uploadedUrl = await uploadPdfToServer(file, file.name);
+    if (uploadedUrl) {
+      await savePdfToLocalCache(wsId, file);
+      await savePdfToLocalCache(uploadedUrl, file);
+      const res = await onUpdateWorksheet(wsId, {
+        pdfDataUrl: uploadedUrl,
+        pdfFileName: file.name,
+        fileSizeBytes: file.size,
+      });
+      const isOk = typeof res === 'boolean' ? res : res.success;
+      if (isOk) {
+        setFeedbackMsg({ type: 'success', text: `✅ ${file.name} 파일로 성공적으로 교체되었습니다!` });
+        setTimeout(() => setFeedbackMsg(null), 3000);
+      }
+    } else {
+      setFeedbackMsg({ type: 'error', text: 'PDF 파일 업로드에 실패했습니다.' });
+    }
+  };
+
   // Save / Submit Worksheet
   const handleSaveWorksheet = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -357,6 +383,14 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     const errorMessage = typeof result === 'object' && result.message ? result.message : '저장 중 오류가 발생했습니다.';
 
     if (isSuccess) {
+      if (selectedFileObject) {
+        if (editingId) {
+          savePdfToLocalCache(editingId, selectedFileObject);
+        }
+        if (finalPdfUrl) {
+          savePdfToLocalCache(finalPdfUrl, selectedFileObject);
+        }
+      }
       setFeedbackMsg({
         type: 'success',
         text: editingId ? '학습지가 성공적으로 수정되었습니다.' : '새 학습지가 등록되었습니다!',
@@ -1087,6 +1121,39 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
                                   </button>
 
                                   <div className="w-px h-5 bg-slate-200 mx-1" />
+
+                                  {/* Quick PDF Replace */}
+                                  <label
+                                    className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                                    title="이 학습지의 PDF 파일을 새로운 파일로 즉시 교체"
+                                  >
+                                    <Upload className="w-3.5 h-3.5 text-indigo-600" />
+                                    PDF 교체
+                                    <input
+                                      type="file"
+                                      accept=".pdf,application/pdf"
+                                      className="hidden"
+                                      onChange={(e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          handleQuickReplacePdf(ws.id, file);
+                                        }
+                                        e.target.value = '';
+                                      }}
+                                    />
+                                  </label>
+
+                                  {/* Preview PDF */}
+                                  <a
+                                    href={`/api/pdf/${ws.id}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                                    title="새 창에서 원본 PDF 파일 열람"
+                                  >
+                                    <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
+                                    미리보기
+                                  </a>
 
                                   <button
                                     type="button"

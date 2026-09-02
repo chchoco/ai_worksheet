@@ -46,7 +46,8 @@ export async function savePdfToLocalCache(key: string, data: Blob | ArrayBuffer 
     } else if (data instanceof ArrayBuffer) {
       blobToStore = new Blob([data], { type: 'application/pdf' });
     } else if (data instanceof Uint8Array) {
-      blobToStore = new Blob([data.buffer as ArrayBuffer], { type: 'application/pdf' });
+      const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      blobToStore = new Blob([arrayBuffer], { type: 'application/pdf' });
     } else if (typeof data === 'string') {
       if (data.startsWith('data:')) {
         const parts = data.split(',');
@@ -56,7 +57,7 @@ export async function savePdfToLocalCache(key: string, data: Blob | ArrayBuffer 
         for (let i = 0; i < byteCharacters.length; i++) {
           byteNumbers[i] = byteCharacters.charCodeAt(i);
         }
-        blobToStore = new Blob([byteNumbers], { type: 'application/pdf' });
+        blobToStore = new Blob([byteNumbers.buffer], { type: 'application/pdf' });
       } else {
         // Normal URL string - do not store as binary
         return false;
@@ -117,6 +118,19 @@ export async function deletePdfFromLocalCache(key: string): Promise<void> {
     const db = await openPdfDatabase();
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     transaction.objectStore(STORE_NAME).delete(key);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Clear all cached PDFs from IndexedDB
+ */
+export async function clearAllPdfLocalCache(): Promise<void> {
+  try {
+    const db = await openPdfDatabase();
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    transaction.objectStore(STORE_NAME).clear();
   } catch {
     // ignore
   }

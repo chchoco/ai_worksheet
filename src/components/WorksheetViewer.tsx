@@ -208,6 +208,7 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
           >
             {pdfSourceUrl ? (
               <PdfCanvasViewer
+                key={worksheet.id}
                 pdfUrl={pdfSourceUrl}
                 worksheetId={worksheet.id}
                 title={worksheet.title}

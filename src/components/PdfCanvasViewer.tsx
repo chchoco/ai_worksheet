@@ -6,15 +6,17 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCw,
+  RotateCcw,
   Loader2,
   AlertCircle,
   ExternalLink,
   Download,
   Layers,
   FileText,
+  RefreshCw,
 } from 'lucide-react';
 import { generateStandardWorksheetPdfBase64 } from '../../serverPdfGenerator';
-import { getPdfFromLocalCache, savePdfToLocalCache } from '../utils/pdfStorage';
+import { getPdfFromLocalCache, savePdfToLocalCache, deletePdfFromLocalCache } from '../utils/pdfStorage';
 
 // Configure PDF.js worker
 try {
@@ -46,10 +48,17 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
   const [viewMode, setViewMode] = useState<'all' | 'single'>('all');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState<number>(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef<{ [key: number]: HTMLCanvasElement | null }>({});
   const renderTaskRefs = useRef<{ [key: number]: any }>({});
+
+  const handleForceReload = async () => {
+    if (worksheetId) await deletePdfFromLocalCache(worksheetId);
+    if (pdfUrl) await deletePdfFromLocalCache(pdfUrl);
+    setReloadKey(prev => prev + 1);
+  };
 
   // 1. Load PDF Document with robust data parsing and automatic fallback to valid generated PDF
   useEffect(() => {
@@ -67,20 +76,8 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
           throw new Error('PDF URL is empty');
         }
 
-        // A. Check IndexedDB cache first
-        let cachedBlob: Blob | null = null;
-        if (worksheetId) {
-          cachedBlob = await getPdfFromLocalCache(worksheetId);
-        }
-        if (!cachedBlob && pdfUrl.startsWith('/api/pdf/')) {
-          cachedBlob = await getPdfFromLocalCache(pdfUrl);
-        }
-
-        if (cachedBlob && cachedBlob.size > 100) {
-          const buf = await cachedBlob.arrayBuffer();
-          const array = new Uint8Array(buf);
-          loadingTask = pdfjsLib.getDocument({ data: array });
-        } else if (pdfUrl.startsWith('data:application/pdf') || pdfUrl.startsWith('data:;base64,') || pdfUrl.startsWith('data:application/octet-stream')) {
+        // A. Base64 URL format
+        if (pdfUrl.startsWith('data:application/pdf') || pdfUrl.startsWith('data:;base64,') || pdfUrl.startsWith('data:application/octet-stream')) {
           const parts = pdfUrl.split(',');
           const base64Data = parts.length > 1 ? parts[1] : parts[0];
           
@@ -108,21 +105,34 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
             loadingTask = pdfjsLib.getDocument({ data: validArray });
           }
         } else if (pdfUrl.startsWith('/') || pdfUrl.startsWith('http')) {
-          // Fetch as binary array buffer directly for 100% reliable PDF.js parsing
+          // B. Direct Network Fetch with cache-busting to guarantee latest upload
           try {
-            const res = await fetch(pdfUrl);
+            const targetUrl = pdfUrl.includes('?') ? `${pdfUrl}&_t=${Date.now()}` : `${pdfUrl}?_t=${Date.now()}`;
+            const res = await fetch(targetUrl, { cache: 'no-cache' });
             if (!res.ok) throw new Error(`HTTP error ${res.status}`);
             const buf = await res.arrayBuffer();
             const array = new Uint8Array(buf);
             
-            // Cache to IndexedDB
-            if (worksheetId) savePdfToLocalCache(worksheetId, array);
-            savePdfToLocalCache(pdfUrl, array);
-
-            loadingTask = pdfjsLib.getDocument({ data: array });
+            if (array.length > 4 && array[0] === 0x25 && array[1] === 0x50 && array[2] === 0x44 && array[3] === 0x46) {
+              if (worksheetId) savePdfToLocalCache(worksheetId, array);
+              savePdfToLocalCache(pdfUrl, array);
+              loadingTask = pdfjsLib.getDocument({ data: array });
+            } else {
+              throw new Error('Received file is not a valid PDF binary');
+            }
           } catch (fetchErr) {
-            console.warn('Direct fetch failed, trying pdfjsLib.getDocument(url):', fetchErr);
-            loadingTask = pdfjsLib.getDocument(pdfUrl);
+            console.warn('Direct fetch failed, checking IndexedDB cache fallback:', fetchErr);
+            let cachedBlob: Blob | null = null;
+            if (worksheetId) cachedBlob = await getPdfFromLocalCache(worksheetId);
+            if (!cachedBlob && pdfUrl.startsWith('/api/pdf/')) cachedBlob = await getPdfFromLocalCache(pdfUrl);
+
+            if (cachedBlob && cachedBlob.size > 100) {
+              const buf = await cachedBlob.arrayBuffer();
+              const array = new Uint8Array(buf);
+              loadingTask = pdfjsLib.getDocument({ data: array });
+            } else {
+              loadingTask = pdfjsLib.getDocument(pdfUrl);
+            }
           }
         } else {
           loadingTask = pdfjsLib.getDocument(pdfUrl);
@@ -167,7 +177,7 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [pdfUrl, worksheetId]);
+  }, [pdfUrl, worksheetId, reloadKey]);
 
   // 2. Render a specific page onto its canvas
   const renderPage = useCallback(
@@ -317,6 +327,13 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
             className="p-1.5 hover:bg-slate-600 active:bg-slate-500 rounded text-slate-200 transition-colors"
           >
             <RotateCw className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={handleForceReload}
+            title="PDF 새로고침 (최신 파일 다시 불러오기)"
+            className="p-1.5 hover:bg-slate-600 active:bg-slate-500 rounded text-slate-200 transition-colors"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
           </button>
         </div>
 
