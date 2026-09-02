@@ -215,6 +215,13 @@ export default function App() {
               const nextSig = data.worksheets.map((w: Worksheet) => `${w.id}_${w.orderIndex}_${w.updatedAt}`).join('|');
               if (prevSig !== nextSig) {
                 safeCacheWorksheets(data.worksheets);
+                // If current selected worksheet no longer exists, select first available
+                setSelectedWorksheetId(curr => {
+                  if (!curr || !data.worksheets.some((w: Worksheet) => w.id === curr)) {
+                    return data.worksheets[0]?.id || null;
+                  }
+                  return curr;
+                });
                 return data.worksheets;
               }
               return prev;
@@ -222,7 +229,7 @@ export default function App() {
           }
         })
         .catch(() => {});
-    }, 5000);
+    }, 3000);
 
     return () => clearInterval(pollInterval);
   }, []);

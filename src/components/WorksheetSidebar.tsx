@@ -18,13 +18,16 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
   selectedUnitFilter,
   onSelectUnitFilter,
 }) => {
-  // Combine official default units with any custom units from worksheets
-  const allKnownUnits = Array.from(
-    new Set([...DEFAULT_AI_UNITS, ...worksheets.map(w => w.unitTitle)])
-  ).filter(Boolean);
+  // Get all units that have worksheets, ordered by unit key
+  const activeUnitsInWorksheets: string[] = Array.from(new Set(worksheets.map(w => w.unitTitle))).filter(Boolean) as string[];
+
+  // If there are worksheets, only show the units that contain worksheets (or default units if empty)
+  const allKnownUnits: string[] = activeUnitsInWorksheets.length > 0
+    ? activeUnitsInWorksheets
+    : DEFAULT_AI_UNITS;
 
   // Group worksheets by Unit
-  const unitsMap = allKnownUnits.reduce((acc, unit) => {
+  const unitsMap = allKnownUnits.reduce((acc, unit: string) => {
     acc[unit] = worksheets.filter(ws => ws.unitTitle === unit);
     return acc;
   }, {} as Record<string, Worksheet[]>);

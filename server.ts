@@ -186,19 +186,46 @@ function readDB(): DBState {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+    if (!fs.existsSync(UPLOADS_DIR)) {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    }
     if (!fs.existsSync(DB_FILE)) {
       fs.writeFileSync(DB_FILE, JSON.stringify(INITIAL_DB, null, 2), 'utf-8');
       return JSON.parse(JSON.stringify(INITIAL_DB));
     }
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
     const parsed = JSON.parse(raw);
-    return {
+
+    const state: DBState = {
       settings: {
         ...INITIAL_DB.settings,
         ...(parsed.settings || {}),
       },
       worksheets: Array.isArray(parsed.worksheets) ? parsed.worksheets : INITIAL_DB.worksheets,
     };
+
+    // Auto-migrate inline base64 pdfDataUrl to disk files to keep db.json lightweight
+    let hasMigrated = false;
+    state.worksheets.forEach(w => {
+      if (w.pdfDataUrl && w.pdfDataUrl.startsWith('data:application/pdf;base64,')) {
+        try {
+          const base64Data = w.pdfDataUrl.replace(/^data:application\/pdf;base64,/, '');
+          const buffer = Buffer.from(base64Data, 'base64');
+          const filePath = path.join(UPLOADS_DIR, `${w.id}.pdf`);
+          fs.writeFileSync(filePath, buffer);
+          w.pdfDataUrl = `/api/pdf/${w.id}`;
+          hasMigrated = true;
+        } catch (mErr) {
+          console.warn('Migration failed for', w.id, mErr);
+        }
+      }
+    });
+
+    if (hasMigrated) {
+      writeDB(state);
+    }
+
+    return state;
   } catch (err) {
     console.error('Error reading DB:', err);
     return JSON.parse(JSON.stringify(INITIAL_DB));
@@ -210,7 +237,28 @@ function writeDB(data: DBState) {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    // Sanitize any large base64 from being written directly to db.json
+    const sanitizedWorksheets = data.worksheets.map(w => {
+      if (w.pdfDataUrl && w.pdfDataUrl.startsWith('data:application/pdf;base64,')) {
+        try {
+          const base64Data = w.pdfDataUrl.replace(/^data:application\/pdf;base64,/, '');
+          const buffer = Buffer.from(base64Data, 'base64');
+          const filePath = path.join(UPLOADS_DIR, `${w.id}.pdf`);
+          fs.writeFileSync(filePath, buffer);
+          return { ...w, pdfDataUrl: `/api/pdf/${w.id}` };
+        } catch {
+          return w;
+        }
+      }
+      return w;
+    });
+
+    const toSave: DBState = {
+      ...data,
+      worksheets: sanitizedWorksheets,
+    };
+
+    fs.writeFileSync(DB_FILE, JSON.stringify(toSave, null, 2), 'utf-8');
   } catch (err) {
     console.error('Error writing DB:', err);
   }
@@ -465,72 +513,81 @@ app.get('/api/pdf/:id', (req, res) => {
 
 // 8. Create new Worksheet (Teacher)
 app.post('/api/worksheets', (req, res) => {
-  const { pin, worksheet } = req.body;
-  const db = readDB();
+  try {
+    const { pin, worksheet } = req.body;
+    const db = readDB();
 
-  if (!checkTeacherPin(pin, db.settings.teacherPin)) {
-    return res.status(401).json({ success: false, message: '선생님 인증이 필요합니다.' });
-  }
-
-  if (!worksheet || !worksheet.title || !worksheet.unitTitle || !worksheet.lessonNumber) {
-    return res.status(400).json({ success: false, message: '단원명, 차시, 제목은 필수 항목입니다.' });
-  }
-
-  const now = new Date().toISOString();
-  const wsId = `ws-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-
-  let finalPdfDataUrl = worksheet.pdfDataUrl || `/api/pdf/${wsId}`;
-
-  // If base64 was sent, save to disk to keep db.json small and prevent payload overflow
-  if (worksheet.pdfDataUrl && worksheet.pdfDataUrl.startsWith('data:application/pdf;base64,')) {
-    try {
-      const base64Data = worksheet.pdfDataUrl.replace(/^data:application\/pdf;base64,/, '');
-      const buffer = Buffer.from(base64Data, 'base64');
-      const filePath = path.join(UPLOADS_DIR, `${wsId}.pdf`);
-      fs.writeFileSync(filePath, buffer);
-      finalPdfDataUrl = `/api/pdf/${wsId}`;
-    } catch (saveErr) {
-      console.warn('Could not write uploaded pdf buffer to disk:', saveErr);
+    if (!checkTeacherPin(pin, db.settings.teacherPin)) {
+      return res.status(401).json({ success: false, message: '선생님 인증이 필요합니다.' });
     }
+
+    if (!worksheet) {
+      return res.status(400).json({ success: false, message: '학습지 정보가 전달되지 않았습니다.' });
+    }
+
+    const unitTitle = (worksheet.unitTitle || '1단원. 인공지능의 이해').trim();
+    const lessonNumber = (worksheet.lessonNumber || '1차시').trim();
+    const title = (worksheet.title || '새 학습지').trim();
+
+    const now = new Date().toISOString();
+    const wsId = `ws-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+
+    let finalPdfDataUrl = worksheet.pdfDataUrl || `/api/pdf/${wsId}`;
+
+    // If base64 was sent, save to disk to keep db.json small and prevent payload overflow
+    if (worksheet.pdfDataUrl && worksheet.pdfDataUrl.startsWith('data:application/pdf;base64,')) {
+      try {
+        const base64Data = worksheet.pdfDataUrl.replace(/^data:application\/pdf;base64,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+        const filePath = path.join(UPLOADS_DIR, `${wsId}.pdf`);
+        fs.writeFileSync(filePath, buffer);
+        finalPdfDataUrl = `/api/pdf/${wsId}`;
+      } catch (saveErr) {
+        console.warn('Could not write uploaded pdf buffer to disk:', saveErr);
+      }
+    }
+
+    // Place new worksheet at the bottom of its unit (higher orderIndex)
+    const sameUnitWorksheets = db.worksheets.filter(w => w.unitTitle === unitTitle);
+    const maxOrder = sameUnitWorksheets.reduce((max, w) => Math.max(max, w.orderIndex ?? 0), 0);
+    const newOrderIndex = maxOrder + 1;
+
+    const newWorksheet: Worksheet = {
+      id: wsId,
+      unitId: worksheet.unitId || `unit-${encodeURIComponent(unitTitle)}`,
+      unitTitle,
+      lessonNumber,
+      title,
+      subject: worksheet.subject || db.settings.subject || '인공지능 기초',
+      grade: worksheet.grade || db.settings.className || '고등학교',
+      date: worksheet.date || new Date().toISOString().split('T')[0],
+      description: worksheet.description || '',
+      keyPoints: Array.isArray(worksheet.keyPoints) ? worksheet.keyPoints : [],
+      pdfFileName: worksheet.pdfFileName || `${lessonNumber}_${title}.pdf`,
+      pdfDataUrl: finalPdfDataUrl,
+      fileSizeBytes: worksheet.fileSizeBytes || 250000,
+      pageCount: worksheet.pageCount || 2,
+      hasAnswerSheet: !!worksheet.hasAnswerSheet,
+      answerSheetPdfDataUrl: worksheet.answerSheetPdfDataUrl || '',
+      answerSheetText: worksheet.answerSheetText || '',
+      showAnswerSheetToStudents: !!worksheet.showAnswerSheetToStudents,
+      downloadCount: 0,
+      viewCount: 0,
+      createdAt: now,
+      updatedAt: now,
+      isImportant: !!worksheet.isImportant,
+      orderIndex: newOrderIndex,
+    };
+
+    db.worksheets.push(newWorksheet);
+    writeDB(db);
+
+    const sortedList = sortWorksheets(db.worksheets);
+    res.json({ success: true, worksheet: newWorksheet, worksheets: sortedList });
+  } catch (err: any) {
+    console.error('Error creating worksheet:', err);
+    res.status(500).json({ success: false, message: '학습지 저장 중 서버 오류가 발생했습니다.' });
   }
-
-  // Place new worksheet at the bottom of its unit (higher orderIndex)
-  const sameUnitWorksheets = db.worksheets.filter(w => w.unitTitle === worksheet.unitTitle.trim());
-  const maxOrder = sameUnitWorksheets.reduce((max, w) => Math.max(max, w.orderIndex ?? 0), 0);
-  const newOrderIndex = maxOrder + 1;
-
-  const newWorksheet: Worksheet = {
-    id: wsId,
-    unitId: worksheet.unitId || `unit-${encodeURIComponent(worksheet.unitTitle)}`,
-    unitTitle: worksheet.unitTitle.trim(),
-    lessonNumber: worksheet.lessonNumber.trim(),
-    title: worksheet.title.trim(),
-    subject: worksheet.subject || db.settings.subject || '수업',
-    grade: worksheet.grade || db.settings.className,
-    date: worksheet.date || new Date().toISOString().split('T')[0],
-    description: worksheet.description || '',
-    keyPoints: worksheet.keyPoints || [],
-    pdfFileName: worksheet.pdfFileName || `${worksheet.lessonNumber}_${worksheet.title}.pdf`,
-    pdfDataUrl: finalPdfDataUrl,
-    fileSizeBytes: worksheet.fileSizeBytes || 250000,
-    pageCount: worksheet.pageCount || 2,
-    hasAnswerSheet: !!worksheet.hasAnswerSheet,
-    answerSheetPdfDataUrl: worksheet.answerSheetPdfDataUrl || '',
-    answerSheetText: worksheet.answerSheetText || '',
-    showAnswerSheetToStudents: !!worksheet.showAnswerSheetToStudents,
-    downloadCount: 0,
-    viewCount: 0,
-    createdAt: now,
-    updatedAt: now,
-    isImportant: !!worksheet.isImportant,
-    orderIndex: newOrderIndex,
-  };
-
-  db.worksheets.push(newWorksheet);
-  writeDB(db);
-
-  const sortedList = sortWorksheets(db.worksheets);
-  res.json({ success: true, worksheet: newWorksheet, worksheets: sortedList });
 });
 
 // 9. Update Worksheet (Teacher)

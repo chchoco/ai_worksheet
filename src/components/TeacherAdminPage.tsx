@@ -137,6 +137,29 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     }
   };
 
+  const [selectedFileObject, setSelectedFileObject] = useState<File | null>(null);
+
+  // Helper to safely upload PDF via multipart form-data
+  const uploadPdfToServer = async (fileOrBlob: File | Blob, name: string): Promise<string | null> => {
+    try {
+      const formData = new FormData();
+      formData.append('file', fileOrBlob, name);
+      const res = await fetch('/api/upload-pdf', {
+        method: 'POST',
+        body: formData,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success && data.fileUrl) {
+          return data.fileUrl;
+        }
+      }
+    } catch (e) {
+      console.warn('Direct upload failed:', e);
+    }
+    return null;
+  };
+
   // Process File helper (used by both input change and drag&drop)
   const processPdfFile = async (file: File) => {
     if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
@@ -144,46 +167,31 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
       return;
     }
 
+    setSelectedFileObject(file);
     setPdfFileName(file.name);
     setFileSizeBytes(file.size);
     setIsReadingFile(true);
-    setFeedbackMsg(null);
+    setFeedbackMsg({ type: 'success', text: `⏳ ${file.name} 파일을 업로드 처리 중입니다...` });
 
     // Auto fill title if empty
-    if (!title) {
+    if (!title.trim()) {
       const cleanTitle = file.name.replace(/\.[^/.]+$/, '');
       setTitle(cleanTitle);
     }
 
-    try {
-      // 1. First attempt: Direct multipart upload to backend (fast and supports large files up to 100MB)
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const res = await fetch('/api/upload-pdf', {
-        method: 'POST',
-        body: formData,
+    // 1. Direct Multipart Upload (Fast, stream to server disk, bypasses all JSON body limits)
+    const uploadedUrl = await uploadPdfToServer(file, file.name);
+    if (uploadedUrl) {
+      setPdfDataUrl(uploadedUrl);
+      setIsReadingFile(false);
+      setFeedbackMsg({
+        type: 'success',
+        text: `✅ ${file.name} (${formatBytes(file.size)}) 파일이 준비되었습니다!`,
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.fileUrl) {
-          setPdfDataUrl(data.fileUrl);
-          setPdfFileName(data.fileName || file.name);
-          setFileSizeBytes(data.fileSizeBytes || file.size);
-          setIsReadingFile(false);
-          setFeedbackMsg({
-            type: 'success',
-            text: `✅ ${file.name} (${formatBytes(file.size)}) 파일이 성공적으로 준비되었습니다!`,
-          });
-          return;
-        }
-      }
-    } catch (uploadErr) {
-      console.warn('Multipart upload fallback to base64 reader:', uploadErr);
+      return;
     }
 
-    // 2. Fallback: Local FileReader as Base64 Data URL
+    // 2. Fallback to FileReader if offline/local
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
@@ -207,6 +215,8 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     if (file) {
       processPdfFile(file);
     }
+    // Reset file input value so selecting the same or next file triggers onChange reliably
+    e.target.value = '';
   };
 
   // Drag and Drop handlers
@@ -264,6 +274,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     setAnswerSheetText(ws.answerSheetText || '');
     setShowAnswerSheetToStudents(ws.showAnswerSheetToStudents ?? true);
     setIsImportant(ws.isImportant || false);
+    setSelectedFileObject(null);
     setActiveTab('upload');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -280,17 +291,17 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     setAnswerSheetText('');
     setShowAnswerSheetToStudents(true);
     setIsImportant(false);
+    setSelectedFileObject(null);
+    setIsReadingFile(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   // Save / Submit Worksheet
   const handleSaveWorksheet = async (e: React.FormEvent) => {
     e.preventDefault();
-    const finalUnit = unitMode === 'select' ? selectedUnit : newUnitTitle.trim();
-
-    if (!finalUnit) {
-      setFeedbackMsg({ type: 'error', text: '단원명을 입력하거나 선택해주세요.' });
-      return;
-    }
+    const finalUnit = (unitMode === 'select' ? selectedUnit : newUnitTitle).trim() || DEFAULT_AI_UNITS[0];
 
     if (!title.trim()) {
       setFeedbackMsg({ type: 'error', text: '학습지 제목을 입력해주세요.' });
@@ -303,15 +314,40 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     }
 
     setIsSubmitting(true);
+    setFeedbackMsg(null);
+
+    let finalPdfUrl = pdfDataUrl;
+
+    // If we have a pending selected file or base64 URL, upload it via multipart first to avoid JSON limits
+    if (selectedFileObject && (!finalPdfUrl || !finalPdfUrl.startsWith('/api/pdf/'))) {
+      const uploaded = await uploadPdfToServer(selectedFileObject, pdfFileName || selectedFileObject.name);
+      if (uploaded) {
+        finalPdfUrl = uploaded;
+        setPdfDataUrl(uploaded);
+      }
+    } else if (finalPdfUrl && finalPdfUrl.startsWith('data:application/pdf;base64,')) {
+      try {
+        const res = await fetch(finalPdfUrl);
+        const blob = await res.blob();
+        const uploaded = await uploadPdfToServer(blob, pdfFileName || `${title.trim()}.pdf`);
+        if (uploaded) {
+          finalPdfUrl = uploaded;
+          setPdfDataUrl(uploaded);
+        }
+      } catch (err) {
+        console.warn('Base64 upload conversion:', err);
+      }
+    }
+
     const payload: Partial<Worksheet> = {
       unitTitle: finalUnit,
-      lessonNumber,
+      lessonNumber: lessonNumber.trim() || '1차시',
       title: title.trim(),
       date,
       description: description.trim(),
       keyPoints: keyPoints.filter(k => k.trim().length > 0),
       pdfFileName: pdfFileName || `${lessonNumber}_${title.trim()}.pdf`,
-      pdfDataUrl: pdfDataUrl || '',
+      pdfDataUrl: finalPdfUrl || '',
       fileSizeBytes: fileSizeBytes || 50000,
       pageCount: pageCount || 2,
       hasAnswerSheet,
