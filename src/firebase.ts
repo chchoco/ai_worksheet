@@ -261,19 +261,25 @@ export async function firestoreAddWorksheet(wsData: Partial<Worksheet>): Promise
   const wsId = wsData.id || `ws-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const now = new Date().toISOString();
 
+  // Strip massive base64 from Firestore doc to guarantee <1MB document size limit
+  let safePdfUrl = wsData.pdfDataUrl || `/api/pdf/${wsId}`;
+  if (safePdfUrl.startsWith('data:application/pdf;base64,')) {
+    safePdfUrl = `/api/pdf/${wsId}`;
+  }
+
   const newDoc: Worksheet = {
     id: wsId,
     unitId: wsData.unitId || `unit-${encodeURIComponent(wsData.unitTitle || '1단원')}`,
     unitTitle: (wsData.unitTitle || '1단원. 인공지능의 이해').trim(),
-    lessonNumber: (wsData.lessonNumber || '1차시').trim(),
+    lessonNumber: (wsData.lessonNumber || '').trim(),
     title: (wsData.title || '새 학습지').trim(),
     subject: wsData.subject || '인공지능 기초',
     grade: wsData.grade || '고등학교',
     date: wsData.date || now.split('T')[0],
     description: wsData.description || '',
     keyPoints: Array.isArray(wsData.keyPoints) ? wsData.keyPoints.filter(Boolean) : [],
-    pdfFileName: wsData.pdfFileName || `${wsData.lessonNumber}_${wsData.title}.pdf`,
-    pdfDataUrl: wsData.pdfDataUrl || `/api/pdf/${wsId}`,
+    pdfFileName: wsData.pdfFileName || `${wsData.title || '학습지'}.pdf`,
+    pdfDataUrl: safePdfUrl,
     fileSizeBytes: wsData.fileSizeBytes || 250000,
     pageCount: wsData.pageCount || 2,
     hasAnswerSheet: !!wsData.hasAnswerSheet,
@@ -296,8 +302,12 @@ export async function firestoreAddWorksheet(wsData: Partial<Worksheet>): Promise
 // Update Worksheet in Firestore
 export async function firestoreUpdateWorksheet(id: string, updates: Partial<Worksheet>): Promise<{ success: boolean }> {
   const docRef = doc(db, WORKSHEETS_COLLECTION, id);
+  let safeUpdates = { ...updates };
+  if (safeUpdates.pdfDataUrl && safeUpdates.pdfDataUrl.startsWith('data:application/pdf;base64,')) {
+    safeUpdates.pdfDataUrl = `/api/pdf/${id}`;
+  }
   const dataToUpdate = sanitizeForFirestore({
-    ...updates,
+    ...safeUpdates,
     updatedAt: new Date().toISOString(),
   });
   await updateDoc(docRef, dataToUpdate);

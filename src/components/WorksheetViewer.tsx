@@ -84,9 +84,11 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
               <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
                 {worksheet.unitTitle}
               </span>
-              <span className="text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
-                {worksheet.lessonNumber}
-              </span>
+              {worksheet.lessonNumber && (
+                <span className="text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
+                  {worksheet.lessonNumber}
+                </span>
+              )}
               <span className="text-xs text-slate-500 flex items-center gap-1">
                 <Calendar className="w-3 h-3" />
                 {formatDate(worksheet.date)}

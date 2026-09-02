@@ -250,14 +250,14 @@ export default function App() {
         id: `ws-${Date.now()}`,
         unitId: `unit-${encodeURIComponent(wsData.unitTitle || '1단원')}`,
         unitTitle: (wsData.unitTitle || '1단원. 인공지능의 이해').trim(),
-        lessonNumber: (wsData.lessonNumber || '1차시').trim(),
+        lessonNumber: (wsData.lessonNumber || '').trim(),
         title: (wsData.title || '새 학습지').trim(),
         subject: wsData.subject || '인공지능 기초',
         grade: wsData.grade || '고등학교',
         date: wsData.date || new Date().toISOString().split('T')[0],
-        description: wsData.description || '',
-        keyPoints: wsData.keyPoints || [],
-        pdfFileName: wsData.pdfFileName || `${wsData.lessonNumber}_${wsData.title}.pdf`,
+        description: '',
+        keyPoints: [],
+        pdfFileName: wsData.pdfFileName || `${wsData.title || '학습지'}.pdf`,
         pdfDataUrl: wsData.pdfDataUrl || '',
         fileSizeBytes: wsData.fileSizeBytes || 250000,
         pageCount: wsData.pageCount || 2,
@@ -273,31 +273,55 @@ export default function App() {
         orderIndex: worksheets.length + 1,
       };
 
-      // 2. Direct Firestore Cloud Write (Propagates instantly to all other browsers & devices)
+      // 2. Direct Firestore Cloud Write
       try {
         await firestoreAddWorksheet(savedWs);
       } catch (fErr) {
         console.warn('Firestore write warning:', fErr);
       }
 
-      if (res.ok && data && data.success) {
-        const nextList: Worksheet[] = data.worksheets || [...worksheets, savedWs];
-        setWorksheets(nextList);
-        safeCacheWorksheets(nextList);
-        setSelectedWorksheetId(savedWs.id);
-        return { success: true };
-      } else {
-        const nextList: Worksheet[] = [...worksheets, savedWs];
-        setWorksheets(nextList);
-        safeCacheWorksheets(nextList);
-        setSelectedWorksheetId(savedWs.id);
-        return { success: true };
-      }
+      const nextList: Worksheet[] = (data && data.success && Array.isArray(data.worksheets))
+        ? data.worksheets
+        : [...worksheets.filter(w => w.id !== savedWs.id), savedWs];
+
+      setWorksheets(nextList);
+      safeCacheWorksheets(nextList);
+      setSelectedWorksheetId(savedWs.id);
+      return { success: true };
     } catch (err: any) {
       console.error('Backend add worksheet error, falling back to Firestore:', err);
       try {
         const res = await firestoreAddWorksheet(wsData);
         if (res.success) {
+          const fallbackWs: Worksheet = {
+            id: res.id,
+            unitId: `unit-${encodeURIComponent(wsData.unitTitle || '1단원')}`,
+            unitTitle: (wsData.unitTitle || '1단원. 인공지능의 이해').trim(),
+            lessonNumber: (wsData.lessonNumber || '').trim(),
+            title: (wsData.title || '새 학습지').trim(),
+            subject: wsData.subject || '인공지능 기초',
+            grade: wsData.grade || '고등학교',
+            date: wsData.date || new Date().toISOString().split('T')[0],
+            description: '',
+            keyPoints: [],
+            pdfFileName: wsData.pdfFileName || `${wsData.title || '학습지'}.pdf`,
+            pdfDataUrl: wsData.pdfDataUrl || `/api/pdf/${res.id}`,
+            fileSizeBytes: wsData.fileSizeBytes || 250000,
+            pageCount: wsData.pageCount || 2,
+            hasAnswerSheet: !!wsData.hasAnswerSheet,
+            answerSheetPdfDataUrl: wsData.answerSheetPdfDataUrl || '',
+            answerSheetText: wsData.answerSheetText || '',
+            showAnswerSheetToStudents: wsData.showAnswerSheetToStudents ?? true,
+            downloadCount: 0,
+            viewCount: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            isImportant: !!wsData.isImportant,
+            orderIndex: worksheets.length + 1,
+          };
+          const nextList = [...worksheets.filter(w => w.id !== res.id), fallbackWs];
+          setWorksheets(nextList);
+          safeCacheWorksheets(nextList);
           setSelectedWorksheetId(res.id);
           return { success: true };
         }

@@ -77,11 +77,9 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
   const [unitMode, setUnitMode] = useState<'select' | 'new'>('select');
   const [selectedUnit, setSelectedUnit] = useState<string>(existingUnits[0] || DEFAULT_AI_UNITS[0]);
   const [newUnitTitle, setNewUnitTitle] = useState<string>('');
-  const [lessonNumber, setLessonNumber] = useState<string>('1차시');
+  const [lessonNumber, setLessonNumber] = useState<string>('');
   const [title, setTitle] = useState<string>('');
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [description, setDescription] = useState<string>('');
-  const [keyPoints, setKeyPoints] = useState<string[]>(['']);
   const [pdfFileName, setPdfFileName] = useState<string>('');
   const [pdfDataUrl, setPdfDataUrl] = useState<string>('');
   const [fileSizeBytes, setFileSizeBytes] = useState<number>(0);
@@ -243,29 +241,13 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     }
   };
 
-  const handleAddKeyPoint = () => {
-    setKeyPoints([...keyPoints, '']);
-  };
-
-  const handleRemoveKeyPoint = (index: number) => {
-    setKeyPoints(keyPoints.filter((_, i) => i !== index));
-  };
-
-  const handleKeyPointChange = (index: number, val: string) => {
-    const next = [...keyPoints];
-    next[index] = val;
-    setKeyPoints(next);
-  };
-
   // Populate form for editing
   const handleStartEdit = (ws: Worksheet) => {
     setEditingId(ws.id);
     setSelectedUnit(ws.unitTitle);
-    setLessonNumber(ws.lessonNumber);
+    setLessonNumber(ws.lessonNumber || '');
     setTitle(ws.title);
     setDate(ws.date);
-    setDescription(ws.description || '');
-    setKeyPoints(ws.keyPoints && ws.keyPoints.length > 0 ? ws.keyPoints : ['']);
     setPdfFileName(ws.pdfFileName);
     setPdfDataUrl(ws.pdfDataUrl);
     setFileSizeBytes(ws.fileSizeBytes);
@@ -282,8 +264,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
   const handleCancelEdit = () => {
     setEditingId(null);
     setTitle('');
-    setDescription('');
-    setKeyPoints(['']);
+    setLessonNumber('');
     setPdfFileName('');
     setPdfDataUrl('');
     setFileSizeBytes(0);
@@ -341,12 +322,12 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
 
     const payload: Partial<Worksheet> = {
       unitTitle: finalUnit,
-      lessonNumber: lessonNumber.trim() || '1차시',
+      lessonNumber: lessonNumber.trim(),
       title: title.trim(),
       date,
-      description: description.trim(),
-      keyPoints: keyPoints.filter(k => k.trim().length > 0),
-      pdfFileName: pdfFileName || `${lessonNumber}_${title.trim()}.pdf`,
+      description: '',
+      keyPoints: [],
+      pdfFileName: pdfFileName || `${title.trim()}.pdf`,
       pdfDataUrl: finalPdfUrl || '',
       fileSizeBytes: fileSizeBytes || 50000,
       pageCount: pageCount || 2,
@@ -752,76 +733,61 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
               </div>
 
               {/* Unit Selection & Quick Choice */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-bold text-slate-800">
-                      수업 단원 선택
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setUnitMode(unitMode === 'select' ? 'new' : 'select')}
-                      className="text-[11px] text-indigo-600 font-semibold hover:underline cursor-pointer"
-                    >
-                      {unitMode === 'select' ? '+ 직접 새 단원 입력' : '목록에서 단원 선택'}
-                    </button>
-                  </div>
-
-                  {unitMode === 'select' ? (
-                    <select
-                      value={selectedUnit}
-                      onChange={e => setSelectedUnit(e.target.value)}
-                      className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white font-medium"
-                    >
-                      {allAvailableUnits.map(unit => (
-                        <option key={unit} value={unit}>
-                          {unit}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={newUnitTitle}
-                      onChange={e => setNewUnitTitle(e.target.value)}
-                      placeholder="예: 2단원. 인공지능과 머신러닝 모델"
-                      className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
-                    />
-                  )}
-
-                  {/* 4 Standard Units Quick Buttons */}
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {DEFAULT_AI_UNITS.map((unit, idx) => (
-                      <button
-                        key={unit}
-                        type="button"
-                        onClick={() => {
-                          setUnitMode('select');
-                          setSelectedUnit(unit);
-                        }}
-                        className={`text-[11px] px-2.5 py-1 rounded-lg border transition-all cursor-pointer font-medium ${
-                          selectedUnit === unit && unitMode === 'select'
-                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        {idx + 1}단원 바로선택
-                      </button>
-                    ))}
-                  </div>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800">
+                    수업 단원 선택 <span className="text-rose-500">*</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setUnitMode(unitMode === 'select' ? 'new' : 'select')}
+                    className="text-[11px] text-indigo-600 font-semibold hover:underline cursor-pointer"
+                  >
+                    {unitMode === 'select' ? '+ 직접 새 단원 입력' : '목록에서 단원 선택'}
+                  </button>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-800 mb-1.5">
-                    수업 차시
-                  </label>
+                {unitMode === 'select' ? (
+                  <select
+                    value={selectedUnit}
+                    onChange={e => setSelectedUnit(e.target.value)}
+                    className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white font-medium"
+                  >
+                    {allAvailableUnits.map(unit => (
+                      <option key={unit} value={unit}>
+                        {unit}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
                   <input
                     type="text"
-                    value={lessonNumber}
-                    onChange={e => setLessonNumber(e.target.value)}
-                    placeholder="예: 1차시, 2~3차시, 보충학습"
-                    className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white font-medium"
+                    value={newUnitTitle}
+                    onChange={e => setNewUnitTitle(e.target.value)}
+                    placeholder="예: 2단원. 인공지능과 머신러닝 모델"
+                    className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
                   />
+                )}
+
+                {/* 4 Standard Units Quick Buttons */}
+                <div className="flex flex-wrap gap-1.5">
+                  {DEFAULT_AI_UNITS.map((unit, idx) => (
+                    <button
+                      key={unit}
+                      type="button"
+                      onClick={() => {
+                        setUnitMode('select');
+                        setSelectedUnit(unit);
+                      }}
+                      className={`text-[11px] px-2.5 py-1 rounded-lg border transition-all cursor-pointer font-medium ${
+                        selectedUnit === unit && unitMode === 'select'
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {idx + 1}단원 바로선택
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -835,7 +801,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
                     type="text"
                     value={title}
                     onChange={e => setTitle(e.target.value)}
-                    placeholder="예: [1차시] 인공지능의 정의와 역사 탐구하기"
+                    placeholder="예: 인공지능의 개념과 활용 사례"
                     required
                     className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white font-semibold"
                   />
@@ -851,61 +817,6 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
                     onChange={e => setDate(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
                   />
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="block text-xs font-bold text-slate-800 mb-1.5">
-                  수업 및 학습 목표 설명
-                </label>
-                <textarea
-                  value={description}
-                  onChange={e => setDescription(e.target.value)}
-                  rows={2}
-                  placeholder="학생들이 이번 차시에서 달성해야 하는 핵심 학습 목표나 주의사항을 입력하세요."
-                  className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
-                />
-              </div>
-
-              {/* Key Summary Points */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs font-bold text-slate-800">
-                    핵심 수업 요약 (학생 요약 탭에 표시)
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleAddKeyPoint}
-                    className="text-xs text-indigo-600 font-bold hover:underline inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> 항목 추가
-                  </button>
-                </div>
-                <div className="space-y-2">
-                  {keyPoints.map((point, index) => (
-                    <div key={index} className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-indigo-600 bg-indigo-50 w-6 h-6 rounded-full flex items-center justify-center shrink-0">
-                        {index + 1}
-                      </span>
-                      <input
-                        type="text"
-                        value={point}
-                        onChange={e => handleKeyPointChange(index, e.target.value)}
-                        placeholder={`핵심 요약 ${index + 1}`}
-                        className="flex-1 px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
-                      />
-                      {keyPoints.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveKeyPoint(index)}
-                          className="p-2 text-slate-400 hover:text-rose-500 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
                 </div>
               </div>
 
@@ -1082,7 +993,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
                             <h3 className="text-sm font-black text-slate-900">{unit}</h3>
                           </div>
                           <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
-                            총 {unitWorksheets.length}개 차시
+                            총 {unitWorksheets.length}개 학습지
                           </span>
                         </div>
 
@@ -1104,9 +1015,11 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
 
                                   <div className="flex-1 min-w-0">
                                     <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                                      <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
-                                        {ws.lessonNumber}
-                                      </span>
+                                      {ws.lessonNumber && (
+                                        <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                                          {ws.lessonNumber}
+                                        </span>
+                                      )}
                                       <span className="text-[11px] text-slate-500 flex items-center gap-1">
                                         <Calendar className="w-3 h-3" />
                                         {formatDate(ws.date)}

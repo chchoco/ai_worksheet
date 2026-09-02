@@ -526,11 +526,11 @@ app.post('/api/worksheets', (req, res) => {
     }
 
     const unitTitle = (worksheet.unitTitle || '1단원. 인공지능의 이해').trim();
-    const lessonNumber = (worksheet.lessonNumber || '1차시').trim();
+    const lessonNumber = (worksheet.lessonNumber || '').trim();
     const title = (worksheet.title || '새 학습지').trim();
 
     const now = new Date().toISOString();
-    const wsId = `ws-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+    const wsId = worksheet.id || `ws-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
 
     let finalPdfDataUrl = worksheet.pdfDataUrl || `/api/pdf/${wsId}`;
 
@@ -561,9 +561,9 @@ app.post('/api/worksheets', (req, res) => {
       subject: worksheet.subject || db.settings.subject || '인공지능 기초',
       grade: worksheet.grade || db.settings.className || '고등학교',
       date: worksheet.date || new Date().toISOString().split('T')[0],
-      description: worksheet.description || '',
-      keyPoints: Array.isArray(worksheet.keyPoints) ? worksheet.keyPoints : [],
-      pdfFileName: worksheet.pdfFileName || `${lessonNumber}_${title}.pdf`,
+      description: '',
+      keyPoints: [],
+      pdfFileName: worksheet.pdfFileName || `${title}.pdf`,
       pdfDataUrl: finalPdfDataUrl,
       fileSizeBytes: worksheet.fileSizeBytes || 250000,
       pageCount: worksheet.pageCount || 2,

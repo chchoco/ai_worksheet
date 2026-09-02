@@ -117,7 +117,7 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
                       : 'text-slate-400 bg-white border-slate-200'
                   }`}
                 >
-                  {unitWorksheets.length}차시
+                  {unitWorksheets.length}개
                 </span>
               </button>
 
@@ -129,7 +129,7 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
                       <p>등록된 학습지가 없습니다.</p>
                     </div>
                   ) : (
-                    unitWorksheets.map(ws => {
+                    unitWorksheets.map((ws, wsIdx) => {
                       const isSelected = ws.id === selectedWorksheetId;
 
                       return (
@@ -149,7 +149,7 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
                                 ? 'bg-indigo-600 text-white'
                                 : 'bg-slate-100 text-slate-700 font-semibold'
                             }`}>
-                              {ws.lessonNumber}
+                              {ws.lessonNumber || `#${wsIdx + 1}`}
                             </span>
                             {ws.isImportant && (
                               <Star className="w-3 h-3 text-amber-500 fill-amber-400 shrink-0" />
