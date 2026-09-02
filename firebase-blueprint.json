@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "worksheets": {
+      "title": "Worksheet",
+      "description": "Uploaded classroom worksheets",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "unitId": { "type": "string" },
+        "unitTitle": { "type": "string" },
+        "lessonNumber": { "type": "string" },
+        "title": { "type": "string" },
+        "subject": { "type": "string" },
+        "grade": { "type": "string" },
+        "date": { "type": "string" },
+        "description": { "type": "string" },
+        "keyPoints": { "type": "array", "items": { "type": "string" } },
+        "pdfFileName": { "type": "string" },
+        "pdfDataUrl": { "type": "string" },
+        "fileSizeBytes": { "type": "number" },
+        "pageCount": { "type": "number" },
+        "hasAnswerSheet": { "type": "boolean" },
+        "answerSheetPdfDataUrl": { "type": "string" },
+        "answerSheetText": { "type": "string" },
+        "showAnswerSheetToStudents": { "type": "boolean" },
+        "downloadCount": { "type": "number" },
+        "viewCount": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "isImportant": { "type": "boolean" },
+        "orderIndex": { "type": "number" }
+      }
+    },
+    "settings": {
+      "title": "Class Settings",
+      "description": "Classroom metadata, notice, and pin",
+      "type": "object",
+      "properties": {
+        "className": { "type": "string" },
+        "schoolName": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "subject": { "type": "string" },
+        "classNotice": { "type": "string" },
+        "teacherPin": { "type": "string" },
+        "accentColor": { "type": "string" }
+      }
+    }
+  }
+}

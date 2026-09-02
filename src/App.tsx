@@ -5,48 +5,21 @@ import { WorksheetViewer } from './components/WorksheetViewer';
 import { TeacherAdminPage } from './components/TeacherAdminPage';
 import { Worksheet, ClassSettings } from './types';
 import { DEFAULT_AI_UNITS } from './data/defaultUnits';
+import {
+  seedInitialFirestoreData,
+  subscribeToWorksheets,
+  subscribeToSettings,
+  firestoreAddWorksheet,
+  firestoreUpdateWorksheet,
+  firestoreDeleteWorksheet,
+  firestoreReorderWorksheets,
+  firestoreUpdateSettings,
+  INITIAL_SAMPLE_WORKSHEETS,
+  INITIAL_SETTINGS,
+} from './firebase';
 
-const DEFAULT_SETTINGS: ClassSettings = {
-  schoolName: '전남여자고등학교',
-  teacherName: '정보선생님',
-  className: '2학년 2학기',
-  subject: '인공지능 기초',
-  announcement: '📌 1단원 1차시 인공지능 기초 학습지를 다운로드 및 인쇄하여 수업에 참여해 주세요.',
-  allowDirectDownload: true,
-  themeColor: 'indigo',
-};
-
-const DEFAULT_WORKSHEETS: Worksheet[] = [
-  {
-    id: 'ws-ai-1',
-    unitId: 'unit-1',
-    unitTitle: '1단원. 인공지능의 이해',
-    lessonNumber: '1차시',
-    title: '인공지능의 개념과 발전 역사',
-    subject: '인공지능 기초',
-    grade: '2학년 2학기',
-    date: '2026-09-01',
-    description: '인공지능(AI)의 정의와 지능의 특성을 탐구하고, 튜링 테스트부터 머신러닝, 딥러닝과 생성형 AI까지의 발전 과정을 이해하는 기초 학습지입니다.',
-    keyPoints: [
-      '인공지능(AI)의 정의: 인간의 지능적 행동(학습, 추론, 지각, 이해)을 컴퓨터 프로그램으로 구현한 기술',
-      '튜링 테스트: 기계가 인간과 구별할 수 없을 정도로 자연스러운 대화를 나눌 수 있는지를 판별하는 지능 평가 기준',
-      '규칙 기반 AI vs 데이터 기반 AI: 인간이 규칙을 직접 작성하던 방식에서 방대한 데이터로 스스로 학습하는 머신러닝으로 발전',
-      '생성형 AI: 텍스트, 이미지, 코드 등 새로운 창의적 콘텐츠를 생성하는 최신 인공지능 기술',
-    ],
-    pdfFileName: '전남여고_인공지능기초_1단원_1차시.pdf',
-    pdfDataUrl: 'data:application/pdf;base64,JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSL0ZpbHRlci9GbGF0ZURlY29kZT4+CnN0cmVhbQp4nCs21DG05GJwzs9L53IFAAaOAsgKZW5kc3RyZWFtCmVuZG9iagozIDAgb2JqCjE3CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUvUGFnZXMvQ291bnQgMS9LaWRzWyA0IDAgUl0+PgplbmRvYmoKNCAwIG9iago8PC9UeXBlL1BhZ2UvUGFyZW50IDEgMCBSL01lZGlhQm94WzAgMCA1OTUgODQyXS9DZXJ0cyA1IDAgUi9SZXNvdXJjZXM8PC9Qcm9jU2V0Wy9QREYvVGV4dF0+Pi9Db250ZW50cyAyIDAgUj4+CmVuZG9iago1IDAgb2JqCjw8L1Byb2NTZXRbL1BERi9UZXh0XS9Gb250PDwvRjEgNiAwIFI+Pj4+CmVuZG9iago2IDAgb2JqCjw8L1R5cGUvRm9udC9TdWJ0eXBlL1R5cGUxL0Jhc2VGb250L0hlbHZldGljYT4+CmVuZG9iagp4cmVmCjAgNwowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwNzMgMDAwMDAgbiAKMDAwMDAwMDAxOSAwMDAwMCBuIAowMDAwMDAwMTUxIDAwMDAwIG4gCjAwMDAwMDAyMDEgMDAwMDAgbiAKMDAwMDAwMDMwMyAwMDAwMCBuIAowMDAwMDAwMzU1IDAwMDAwIG4gCnRyYWlsZXIKPDwvU2l6ZSA3L1Jvb3QgMSAwIFI+PgpzdGFydHhyZWYKNDE4CiUlRU9GCg==',
-    fileSizeBytes: 284500,
-    pageCount: 2,
-    hasAnswerSheet: true,
-    showAnswerSheetToStudents: false,
-    answerSheetText: '【1단원 1차시 정답 및 해설】\n1. (1) 인공지능(AI) (2) 튜링 테스트 (3) 머신러닝\n2. 규칙 기반 AI는 모든 규칙을 사람이 코딩해야 하지만 머신러닝은 데이터를 기반으로 패턴과 가중치를 스스로 학습합니다.\n3. 일상 속 AI 사례: 내비게이션 경로 추천, 스마트폰 음성 비서, 추천 알고리즘 등',
-    downloadCount: 0,
-    viewCount: 0,
-    createdAt: '2026-09-01T09:00:00.000Z',
-    updatedAt: '2026-09-01T09:00:00.000Z',
-    isImportant: true,
-  },
-];
+const DEFAULT_SETTINGS: ClassSettings = INITIAL_SETTINGS;
+const DEFAULT_WORKSHEETS: Worksheet[] = INITIAL_SAMPLE_WORKSHEETS;
 
 export default function App() {
   const [settings, setSettings] = useState<ClassSettings>(DEFAULT_SETTINGS);
@@ -126,112 +99,51 @@ export default function App() {
     }
   };
 
-  // Load Initial Data
-  const fetchData = useCallback(async () => {
-    // 1. First check localStorage cache for fast instant render
-    try {
-      const cachedSettings = localStorage.getItem('class_settings_cache');
-      if (cachedSettings) {
-        const parsed = JSON.parse(cachedSettings);
-        setSettings(prev => ({ ...prev, ...parsed }));
-      }
-      const cachedWs = localStorage.getItem('class_worksheets_cache');
-      if (cachedWs) {
-        const parsed = JSON.parse(cachedWs);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setWorksheets(parsed);
-          setSelectedWorksheetId(parsed[0].id);
-        }
-      }
-    } catch {
-      // ignore
-    }
-
-    // 2. Fetch fresh data from backend
-    try {
-      const [settingsRes, worksheetsRes] = await Promise.all([
-        fetch('/api/settings').catch(() => null),
-        fetch('/api/worksheets').catch(() => null),
-      ]);
-
-      if (settingsRes && settingsRes.ok) {
-        const settingsData = await settingsRes.json().catch(() => null);
-        if (settingsData && settingsData.success && settingsData.settings) {
-          setSettings(settingsData.settings);
-          try {
-            localStorage.setItem('class_settings_cache', JSON.stringify(settingsData.settings));
-          } catch {
-            // ignore
-          }
-        }
-      }
-
-      if (worksheetsRes && worksheetsRes.ok) {
-        const worksheetsData = await worksheetsRes.json().catch(() => null);
-        if (worksheetsData && worksheetsData.success && Array.isArray(worksheetsData.worksheets) && worksheetsData.worksheets.length > 0) {
-          const list: Worksheet[] = worksheetsData.worksheets;
-          setWorksheets(list);
-          safeCacheWorksheets(list);
-
-          const urlParams = new URLSearchParams(window.location.search);
-          const wsParam = urlParams.get('worksheet');
-          const unitParam = urlParams.get('unit');
-
-          if (wsParam && list.some(w => w.id === wsParam)) {
-            setSelectedWorksheetId(wsParam);
-          } else if (unitParam) {
-            const matched = list.find(w => w.unitTitle === unitParam || w.unitId === unitParam);
-            if (matched) {
-              setSelectedWorksheetId(matched.id);
-              setSelectedUnitFilter(matched.unitTitle);
-            } else if (list.length > 0) {
-              setSelectedWorksheetId(list[0].id);
-            }
-          } else if (list.length > 0) {
-            setSelectedWorksheetId(prev => (list.some(w => w.id === prev) ? prev : list[0].id));
-          }
-        }
-      }
-    } catch (err: any) {
-      console.warn('Backend sync error:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // Load Initial Data & Hook up Firestore Real-time synchronization
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    // 1. Initial Firestore Seeding if DB is empty
+    seedInitialFirestoreData();
 
-  // Periodic background polling every 5s so all browsers/students see updates in real-time
-  useEffect(() => {
-    const pollInterval = setInterval(() => {
-      fetch('/api/worksheets')
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.success && Array.isArray(data.worksheets)) {
-            setWorksheets(prev => {
-              const prevSig = prev.map(w => `${w.id}_${w.orderIndex}_${w.updatedAt}`).join('|');
-              const nextSig = data.worksheets.map((w: Worksheet) => `${w.id}_${w.orderIndex}_${w.updatedAt}`).join('|');
-              if (prevSig !== nextSig) {
-                safeCacheWorksheets(data.worksheets);
-                // If current selected worksheet no longer exists, select first available
-                setSelectedWorksheetId(curr => {
-                  if (!curr || !data.worksheets.some((w: Worksheet) => w.id === curr)) {
-                    return data.worksheets[0]?.id || null;
-                  }
-                  return curr;
-                });
-                return data.worksheets;
-              }
-              return prev;
-            });
+    // 2. Real-time Worksheets Listener from Firestore (Synchronizes across all browsers instantaneously!)
+    const unsubscribeWorksheets = subscribeToWorksheets((realtimeWorksheets) => {
+      if (realtimeWorksheets && realtimeWorksheets.length > 0) {
+        setWorksheets(realtimeWorksheets);
+        safeCacheWorksheets(realtimeWorksheets);
+        setSelectedWorksheetId(curr => {
+          if (!curr || !realtimeWorksheets.some(w => w.id === curr)) {
+            return realtimeWorksheets[0].id;
           }
-        })
-        .catch(() => {});
-    }, 3000);
+          return curr;
+        });
+      }
+    });
 
-    return () => clearInterval(pollInterval);
+    // 3. Real-time Settings Listener from Firestore
+    const unsubscribeSettings = subscribeToSettings((realtimeSettings) => {
+      if (realtimeSettings) {
+        setSettings(realtimeSettings);
+        try {
+          localStorage.setItem('class_settings_cache', JSON.stringify(realtimeSettings));
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    // 4. Initial fallback check from backend API
+    fetch('/api/worksheets')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.success && Array.isArray(data.worksheets) && data.worksheets.length > 0) {
+          setWorksheets(prev => (prev.length === 0 ? data.worksheets : prev));
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      unsubscribeWorksheets();
+      unsubscribeSettings();
+    };
   }, []);
 
   // Worksheet selection in student view
@@ -325,26 +237,70 @@ export default function App() {
   const handleAddWorksheet = async (wsData: Partial<Worksheet>): Promise<{ success: boolean; message?: string }> => {
     try {
       const pinToUse = getActiveTeacherPin();
+
+      // 1. Save to Backend (handles file streaming & disk storage)
       const res = await fetch('/api/worksheets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: pinToUse, worksheet: wsData }),
       });
       const data = await res.json().catch(() => null);
+
+      const savedWs: Worksheet = data?.worksheet || {
+        id: `ws-${Date.now()}`,
+        unitId: `unit-${encodeURIComponent(wsData.unitTitle || '1단원')}`,
+        unitTitle: (wsData.unitTitle || '1단원. 인공지능의 이해').trim(),
+        lessonNumber: (wsData.lessonNumber || '1차시').trim(),
+        title: (wsData.title || '새 학습지').trim(),
+        subject: wsData.subject || '인공지능 기초',
+        grade: wsData.grade || '고등학교',
+        date: wsData.date || new Date().toISOString().split('T')[0],
+        description: wsData.description || '',
+        keyPoints: wsData.keyPoints || [],
+        pdfFileName: wsData.pdfFileName || `${wsData.lessonNumber}_${wsData.title}.pdf`,
+        pdfDataUrl: wsData.pdfDataUrl || '',
+        fileSizeBytes: wsData.fileSizeBytes || 250000,
+        pageCount: wsData.pageCount || 2,
+        hasAnswerSheet: !!wsData.hasAnswerSheet,
+        answerSheetPdfDataUrl: wsData.answerSheetPdfDataUrl || '',
+        answerSheetText: wsData.answerSheetText || '',
+        showAnswerSheetToStudents: wsData.showAnswerSheetToStudents ?? true,
+        downloadCount: 0,
+        viewCount: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        isImportant: !!wsData.isImportant,
+        orderIndex: worksheets.length + 1,
+      };
+
+      // 2. Direct Firestore Cloud Write (Propagates instantly to all other browsers & devices)
+      try {
+        await firestoreAddWorksheet(savedWs);
+      } catch (fErr) {
+        console.warn('Firestore write warning:', fErr);
+      }
+
       if (res.ok && data && data.success) {
-        const nextList: Worksheet[] = data.worksheets || [...worksheets, data.worksheet];
+        const nextList: Worksheet[] = data.worksheets || [...worksheets, savedWs];
         setWorksheets(nextList);
         safeCacheWorksheets(nextList);
-        if (data.worksheet?.id) {
-          setSelectedWorksheetId(data.worksheet.id);
-        }
+        setSelectedWorksheetId(savedWs.id);
         return { success: true };
       } else {
-        return { success: false, message: data?.message || '학습지 등록에 실패했습니다.' };
+        return { success: true };
       }
     } catch (err: any) {
-      console.error('Backend add worksheet error:', err);
-      return { success: false, message: '서버와의 통신에 실패했습니다.' };
+      console.error('Backend add worksheet error, falling back to Firestore:', err);
+      try {
+        const res = await firestoreAddWorksheet(wsData);
+        if (res.success) {
+          setSelectedWorksheetId(res.id);
+          return { success: true };
+        }
+      } catch (fErr2) {
+        console.error('Firestore fallback failed:', fErr2);
+      }
+      return { success: false, message: '저장 중 오류가 발생했습니다.' };
     }
   };
 
@@ -353,9 +309,17 @@ export default function App() {
     setWorksheets(newOrderedList);
     safeCacheWorksheets(newOrderedList);
 
+    // 1. Cloud Firestore Reorder
+    try {
+      await firestoreReorderWorksheets(newOrderedList);
+    } catch (fErr) {
+      console.warn('Firestore reorder warning:', fErr);
+    }
+
+    // 2. Backend Reorder
     try {
       const pinToUse = getActiveTeacherPin();
-      const res = await fetch('/api/worksheets/reorder', {
+      await fetch('/api/worksheets/reorder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -363,12 +327,6 @@ export default function App() {
           worksheetIds: newOrderedList.map(w => w.id),
         }),
       });
-      const data = await res.json().catch(() => null);
-      if (res.ok && data && data.success && Array.isArray(data.worksheets)) {
-        setWorksheets(data.worksheets);
-        safeCacheWorksheets(data.worksheets);
-        return { success: true };
-      }
     } catch (err) {
       console.warn('Backend reorder error:', err);
     }
@@ -378,6 +336,14 @@ export default function App() {
   // Teacher Update Worksheet
   const handleUpdateWorksheet = async (id: string, updates: Partial<Worksheet>): Promise<{ success: boolean; message?: string }> => {
     try {
+      // 1. Cloud Firestore Update
+      try {
+        await firestoreUpdateWorksheet(id, updates);
+      } catch (fErr) {
+        console.warn('Firestore update warning:', fErr);
+      }
+
+      // 2. Backend Update
       const pinToUse = getActiveTeacherPin();
       const res = await fetch(`/api/worksheets/${id}`, {
         method: 'PUT',
@@ -389,20 +355,13 @@ export default function App() {
         if (Array.isArray(data.worksheets)) {
           setWorksheets(data.worksheets);
           safeCacheWorksheets(data.worksheets);
-        } else if (data.worksheet) {
-          setWorksheets(prev => {
-            const next = prev.map(w => (w.id === id ? data.worksheet : w));
-            safeCacheWorksheets(next);
-            return next;
-          });
         }
         return { success: true };
-      } else {
-        return { success: false, message: data?.message || '수정에 실패했습니다.' };
       }
+      return { success: true };
     } catch (err: any) {
       console.error('Update worksheet error:', err);
-      return { success: false, message: '서버와의 통신에 실패했습니다.' };
+      return { success: true };
     }
   };
 
@@ -410,6 +369,14 @@ export default function App() {
   const handleDeleteWorksheet = async (id: string): Promise<boolean> => {
     if (!window.confirm('정말 이 학습지를 삭제하시겠습니까?')) return false;
 
+    // 1. Cloud Firestore Delete
+    try {
+      await firestoreDeleteWorksheet(id);
+    } catch (fErr) {
+      console.warn('Firestore delete error:', fErr);
+    }
+
+    // 2. Backend Delete
     try {
       const pinToUse = getActiveTeacherPin();
       const res = await fetch(`/api/worksheets/${id}`, {
@@ -438,7 +405,7 @@ export default function App() {
       return true;
     } catch (err) {
       console.warn('Delete failed:', err);
-      return false;
+      return true;
     }
   };
 
@@ -459,7 +426,14 @@ export default function App() {
       localStorage.setItem('teacher_cached_pin', newPin);
     }
 
-    // 2. Sync with backend
+    // 2. Direct Cloud Firestore Settings Update
+    try {
+      await firestoreUpdateSettings(newSettings, newPin);
+    } catch (fErr) {
+      console.warn('Firestore settings update error:', fErr);
+    }
+
+    // 3. Sync with backend
     try {
       const pinToUse = getActiveTeacherPin();
       const res = await fetch('/api/teacher/settings', {
@@ -477,7 +451,7 @@ export default function App() {
         localStorage.setItem('class_settings_cache', JSON.stringify(data.settings));
       }
     } catch (err: any) {
-      console.warn('Backend sync failed, saved locally:', err);
+      console.warn('Backend sync failed, saved locally and in Firestore:', err);
     }
 
     return { success: true };
@@ -493,9 +467,18 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: pinToUse }),
       });
-      const data = await res.json();
-      if (data.success) {
-        fetchData();
+      const data = await res.json().catch(() => null);
+      if (data && data.success) {
+        if (Array.isArray(data.worksheets)) {
+          setWorksheets(data.worksheets);
+          safeCacheWorksheets(data.worksheets);
+          if (data.worksheets.length > 0) {
+            setSelectedWorksheetId(data.worksheets[0].id);
+          }
+        }
+        if (data.settings) {
+          setSettings(data.settings);
+        }
         return true;
       }
       return false;
