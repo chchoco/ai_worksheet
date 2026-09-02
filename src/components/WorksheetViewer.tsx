@@ -54,15 +54,15 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
 
   const handleDownload = () => {
     onRecordDownload(worksheet.id);
-    downloadFile(worksheet.pdfDataUrl, worksheet.pdfFileName);
+    downloadFile(worksheet.pdfDataUrl, worksheet.pdfFileName, worksheet.id);
   };
 
   const handlePrint = () => {
-    triggerPrintWorksheet('worksheet-pdf-container', worksheet.pdfDataUrl);
+    triggerPrintWorksheet('worksheet-pdf-container', worksheet.pdfDataUrl, worksheet.id);
   };
 
   const handleOpenNewTab = () => {
-    openPdfInNewTab(worksheet.pdfDataUrl);
+    openPdfInNewTab(worksheet.pdfDataUrl, worksheet.id);
   };
 
   const toggleFullscreen = () => setIsFullscreen(prev => !prev);
@@ -209,6 +209,7 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
             {pdfSourceUrl ? (
               <PdfCanvasViewer
                 pdfUrl={pdfSourceUrl}
+                worksheetId={worksheet.id}
                 title={worksheet.title}
                 onOpenNewTab={handleOpenNewTab}
                 onDownload={handleDownload}

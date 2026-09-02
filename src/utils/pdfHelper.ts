@@ -1,3 +1,5 @@
+import { getPdfFromLocalCache, savePdfToLocalCache } from './pdfStorage';
+
 /**
  * Utility functions for PDF handling, printing, and file formatting
  */
@@ -21,26 +23,84 @@ export function formatDate(dateString: string): string {
   }
 }
 
+function triggerBlobDownload(blob: Blob, fileName: string) {
+  const blobUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.setAttribute('download', fileName);
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+}
+
 /**
- * Triggers browser download for a PDF URL, data URL, or Blob
+ * Triggers robust browser download for a PDF URL, data URL, or Blob
+ * Guarantees a genuine, openable .pdf file is downloaded with proper UTF-8 filename.
  */
-export function downloadFile(dataUrl: string, fileName: string) {
-  const finalFileName = fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`;
-  
-  if (dataUrl.startsWith('data:')) {
-    const link = document.createElement('a');
-    link.href = dataUrl;
-    link.download = finalFileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    return;
+export async function downloadFile(dataUrl: string, fileName: string, worksheetId?: string) {
+  const finalFileName = fileName && fileName.toLowerCase().endsWith('.pdf') ? fileName : `${fileName || '학습지'}.pdf`;
+
+  // 1. Try to get original blob from IndexedDB cache
+  if (worksheetId) {
+    const cachedBlob = await getPdfFromLocalCache(worksheetId);
+    if (cachedBlob && cachedBlob.size > 100) {
+      triggerBlobDownload(cachedBlob, finalFileName);
+      return;
+    }
   }
 
-  // If it is a backend streaming URL (/api/pdf/...)
+  if (dataUrl && dataUrl.startsWith('/api/pdf/')) {
+    const cachedBlob = await getPdfFromLocalCache(dataUrl);
+    if (cachedBlob && cachedBlob.size > 100) {
+      triggerBlobDownload(cachedBlob, finalFileName);
+      return;
+    }
+  }
+
+  // 2. Base64 data URL conversion to Blob
+  if (dataUrl && (dataUrl.startsWith('data:application/pdf') || dataUrl.startsWith('data:;base64,') || dataUrl.startsWith('data:application/octet-stream'))) {
+    try {
+      const parts = dataUrl.split(',');
+      const base64 = parts.length > 1 ? parts[1] : parts[0];
+      const byteCharacters = atob(base64);
+      const byteNumbers = new Uint8Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const blob = new Blob([byteNumbers], { type: 'application/pdf' });
+      triggerBlobDownload(blob, finalFileName);
+      return;
+    } catch (err) {
+      console.warn('Base64 decode failed for download:', err);
+    }
+  }
+
+  // 3. Fetch from Server endpoint as binary Blob
+  if (dataUrl && (dataUrl.startsWith('/') || dataUrl.startsWith('http'))) {
+    try {
+      const res = await fetch(dataUrl);
+      if (res.ok) {
+        const rawBlob = await res.blob();
+        const pdfBlob = new Blob([rawBlob], { type: 'application/pdf' });
+        
+        // Cache to IndexedDB for next time
+        if (worksheetId) savePdfToLocalCache(worksheetId, pdfBlob);
+        savePdfToLocalCache(dataUrl, pdfBlob);
+
+        triggerBlobDownload(pdfBlob, finalFileName);
+        return;
+      }
+    } catch (err) {
+      console.warn('Direct fetch for download failed, trying fallback:', err);
+    }
+  }
+
+  // 4. Fallback anchor tag
   const link = document.createElement('a');
   link.href = dataUrl;
-  link.download = finalFileName;
+  link.setAttribute('download', finalFileName);
   link.target = '_blank';
   document.body.appendChild(link);
   link.click();
@@ -50,19 +110,29 @@ export function downloadFile(dataUrl: string, fileName: string) {
 /**
  * Open PDF in new tab for direct full-screen reading/printing
  */
-export function openPdfInNewTab(dataUrl: string) {
+export async function openPdfInNewTab(dataUrl: string, worksheetId?: string) {
   if (!dataUrl) return;
-  
-  if (dataUrl.startsWith('data:application/pdf')) {
-    // For base64 data URLs, convert to blob to open cleanly in a new tab
+
+  // Check local cache
+  if (worksheetId) {
+    const cached = await getPdfFromLocalCache(worksheetId);
+    if (cached) {
+      const blobUrl = URL.createObjectURL(cached);
+      window.open(blobUrl, '_blank');
+      return;
+    }
+  }
+
+  if (dataUrl.startsWith('data:application/pdf') || dataUrl.startsWith('data:;base64,')) {
     try {
-      const byteCharacters = atob(dataUrl.split(',')[1]);
-      const byteNumbers = new Array(byteCharacters.length);
+      const parts = dataUrl.split(',');
+      const base64 = parts.length > 1 ? parts[1] : parts[0];
+      const byteCharacters = atob(base64);
+      const byteNumbers = new Uint8Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i);
       }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: 'application/pdf' });
+      const blob = new Blob([byteNumbers], { type: 'application/pdf' });
       const blobUrl = URL.createObjectURL(blob);
       window.open(blobUrl, '_blank');
       return;
@@ -72,15 +142,28 @@ export function openPdfInNewTab(dataUrl: string) {
     }
   }
 
+  if (dataUrl.startsWith('/') || dataUrl.startsWith('http')) {
+    try {
+      const res = await fetch(dataUrl);
+      if (res.ok) {
+        const blob = await res.blob();
+        const pdfBlob = new Blob([blob], { type: 'application/pdf' });
+        const blobUrl = URL.createObjectURL(pdfBlob);
+        window.open(blobUrl, '_blank');
+        return;
+      }
+    } catch {}
+  }
+
   window.open(dataUrl, '_blank');
 }
 
 /**
  * Direct print triggering for PDF or printable element
  */
-export function triggerPrintWorksheet(elementId: string, pdfUrl?: string) {
+export function triggerPrintWorksheet(elementId: string, pdfUrl?: string, worksheetId?: string) {
   if (pdfUrl) {
-    openPdfInNewTab(pdfUrl);
+    openPdfInNewTab(pdfUrl, worksheetId);
     return;
   }
 

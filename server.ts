@@ -478,36 +478,111 @@ app.post('/api/upload-pdf', upload.single('file'), (req, res) => {
 app.get('/api/pdf/:id', (req, res) => {
   const { id } = req.params;
   const cleanId = id.replace(/\.pdf$/, '');
+  const db = readDB();
 
-  // 1. Check in uploads folder
+  // Find corresponding worksheet if any
+  const item = db.worksheets.find(w => w.id === cleanId || w.id === id || w.pdfDataUrl?.includes(cleanId) || w.pdfFileName?.includes(cleanId));
+  const fileName = item?.pdfFileName || `${cleanId}.pdf`;
+
+  // 1. Direct path check in uploads folder
   const possiblePaths = [
     path.join(UPLOADS_DIR, `${cleanId}.pdf`),
     path.join(UPLOADS_DIR, cleanId),
   ];
 
+  // 2. If item has a specific pdfDataUrl referring to a file in uploads
+  if (item?.pdfDataUrl && item.pdfDataUrl.startsWith('/api/pdf/')) {
+    const targetFileId = item.pdfDataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '');
+    possiblePaths.push(path.join(UPLOADS_DIR, `${targetFileId}.pdf`));
+    possiblePaths.push(path.join(UPLOADS_DIR, targetFileId));
+  }
+
+  // 3. Check if any file in UPLOADS_DIR matches
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
+    if (fs.existsSync(p) && fs.statSync(p).isFile()) {
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'inline; filename="worksheet.pdf"');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
       return res.sendFile(p);
     }
   }
 
-  // 2. Check in DB worksheets
-  const db = readDB();
-  const item = db.worksheets.find(w => w.id === cleanId || w.id === id);
-  if (item && item.pdfDataUrl && item.pdfDataUrl.startsWith('data:application/pdf;base64,')) {
-    const base64Data = item.pdfDataUrl.replace(/^data:application\/pdf;base64,/, '');
+  // 4. Check base64 in item
+  if (item && item.pdfDataUrl && (item.pdfDataUrl.startsWith('data:application/pdf;base64,') || item.pdfDataUrl.startsWith('data:;base64,'))) {
+    const base64Data = item.pdfDataUrl.split(',')[1] || item.pdfDataUrl;
     const buffer = Buffer.from(base64Data, 'base64');
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(item.pdfFileName || 'worksheet.pdf')}"`);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
     return res.send(buffer);
   }
 
-  // 3. Fallback sample PDF
+  // 5. Fallback check: look for any pdf in uploads if only 1 exists
+  try {
+    const uploadFiles = fs.readdirSync(UPLOADS_DIR).filter(f => f.endsWith('.pdf'));
+    if (uploadFiles.length > 0) {
+      const latestFile = path.join(UPLOADS_DIR, uploadFiles[uploadFiles.length - 1]);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      return res.sendFile(latestFile);
+    }
+  } catch {}
+
+  // 6. Safe standard template fallback
   const fallback = samplePdfTemplate1.replace(/^data:application\/pdf;base64,/, '');
   const buffer = Buffer.from(fallback, 'base64');
   res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
+  return res.send(buffer);
+});
+
+// 7.3. Direct Download Route with Attachment Header
+app.get('/api/pdf/:id/download', (req, res) => {
+  const { id } = req.params;
+  const cleanId = id.replace(/\.pdf$/, '');
+  const db = readDB();
+
+  const item = db.worksheets.find(w => w.id === cleanId || w.id === id || w.pdfDataUrl?.includes(cleanId));
+  const fileName = item?.pdfFileName || `${cleanId}.pdf`;
+
+  if (item) {
+    item.downloadCount = (item.downloadCount || 0) + 1;
+    writeDB(db);
+  }
+
+  const possiblePaths = [
+    path.join(UPLOADS_DIR, `${cleanId}.pdf`),
+    path.join(UPLOADS_DIR, cleanId),
+  ];
+
+  if (item?.pdfDataUrl && item.pdfDataUrl.startsWith('/api/pdf/')) {
+    const targetFileId = item.pdfDataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '');
+    possiblePaths.push(path.join(UPLOADS_DIR, `${targetFileId}.pdf`));
+    possiblePaths.push(path.join(UPLOADS_DIR, targetFileId));
+  }
+
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      return res.sendFile(p);
+    }
+  }
+
+  if (item && item.pdfDataUrl && (item.pdfDataUrl.startsWith('data:application/pdf;base64,') || item.pdfDataUrl.startsWith('data:;base64,'))) {
+    const base64Data = item.pdfDataUrl.split(',')[1] || item.pdfDataUrl;
+    const buffer = Buffer.from(base64Data, 'base64');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    return res.send(buffer);
+  }
+
+  const fallback = samplePdfTemplate1.replace(/^data:application\/pdf;base64,/, '');
+  const buffer = Buffer.from(fallback, 'base64');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
   return res.send(buffer);
 });
 

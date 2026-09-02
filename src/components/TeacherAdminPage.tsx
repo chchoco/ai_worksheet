@@ -33,6 +33,7 @@ import {
 import { Worksheet, ClassSettings } from '../types';
 import { formatBytes, formatDate } from '../utils/pdfHelper';
 import { DEFAULT_AI_UNITS } from '../data/defaultUnits';
+import { savePdfToLocalCache } from '../utils/pdfStorage';
 
 interface TeacherAdminPageProps {
   isTeacherMode: boolean;
@@ -171,6 +172,9 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     setIsReadingFile(true);
     setFeedbackMsg({ type: 'success', text: `⏳ ${file.name} 파일을 업로드 처리 중입니다...` });
 
+    // Cache file to IndexedDB right away for instant preview & download
+    await savePdfToLocalCache(file.name, file);
+
     // Auto fill title if empty
     if (!title.trim()) {
       const cleanTitle = file.name.replace(/\.[^/.]+$/, '');
@@ -181,6 +185,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     const uploadedUrl = await uploadPdfToServer(file, file.name);
     if (uploadedUrl) {
       setPdfDataUrl(uploadedUrl);
+      await savePdfToLocalCache(uploadedUrl, file);
       setIsReadingFile(false);
       setFeedbackMsg({
         type: 'success',
@@ -191,9 +196,11 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
 
     // 2. Fallback to FileReader if offline/local
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       if (event.target?.result) {
-        setPdfDataUrl(event.target.result as string);
+        const dataUrlStr = event.target.result as string;
+        setPdfDataUrl(dataUrlStr);
+        await savePdfToLocalCache(dataUrlStr, file);
         setIsReadingFile(false);
         setFeedbackMsg({
           type: 'success',

@@ -14,17 +14,18 @@ import {
   FileText,
 } from 'lucide-react';
 import { generateStandardWorksheetPdfBase64 } from '../../serverPdfGenerator';
+import { getPdfFromLocalCache, savePdfToLocalCache } from '../utils/pdfStorage';
 
 // Configure PDF.js worker
 try {
-  // Use worker bundle from CDN with matching version or fallback
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '4.0.379'}/pdf.worker.min.mjs`;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version || '4.0.379'}/build/pdf.worker.min.mjs`;
 } catch {
   // Ignore worker initialization error in fallback
 }
 
 interface PdfCanvasViewerProps {
   pdfUrl: string;
+  worksheetId?: string;
   title?: string;
   onOpenNewTab?: () => void;
   onDownload?: () => void;
@@ -32,6 +33,7 @@ interface PdfCanvasViewerProps {
 
 export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
   pdfUrl,
+  worksheetId,
   title = '학습지 PDF',
   onOpenNewTab,
   onDownload,
@@ -65,7 +67,20 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
           throw new Error('PDF URL is empty');
         }
 
-        if (pdfUrl.startsWith('data:application/pdf') || pdfUrl.startsWith('data:;base64,') || pdfUrl.startsWith('data:application/octet-stream')) {
+        // A. Check IndexedDB cache first
+        let cachedBlob: Blob | null = null;
+        if (worksheetId) {
+          cachedBlob = await getPdfFromLocalCache(worksheetId);
+        }
+        if (!cachedBlob && pdfUrl.startsWith('/api/pdf/')) {
+          cachedBlob = await getPdfFromLocalCache(pdfUrl);
+        }
+
+        if (cachedBlob && cachedBlob.size > 100) {
+          const buf = await cachedBlob.arrayBuffer();
+          const array = new Uint8Array(buf);
+          loadingTask = pdfjsLib.getDocument({ data: array });
+        } else if (pdfUrl.startsWith('data:application/pdf') || pdfUrl.startsWith('data:;base64,') || pdfUrl.startsWith('data:application/octet-stream')) {
           const parts = pdfUrl.split(',');
           const base64Data = parts.length > 1 ? parts[1] : parts[0];
           
@@ -77,13 +92,11 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
               array[i] = raw.charCodeAt(i);
             }
             
-            // Check if binary starts with %PDF-
-            const header = String.fromCharCode(array[0], array[1], array[2], array[3], array[4]);
-            if (header.startsWith('%PDF')) {
-              loadingTask = pdfjsLib.getDocument({ data: array });
-            } else {
-              throw new Error('Invalid PDF header structure');
-            }
+            // Save to IndexedDB
+            if (worksheetId) savePdfToLocalCache(worksheetId, array);
+            savePdfToLocalCache(pdfUrl, array);
+
+            loadingTask = pdfjsLib.getDocument({ data: array });
           } catch (b64Err) {
             console.warn('Base64 data corrupted or invalid header, generating standard template:', b64Err);
             const validPdfBase64 = await generateStandardWorksheetPdfBase64();
@@ -94,8 +107,24 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
             }
             loadingTask = pdfjsLib.getDocument({ data: validArray });
           }
+        } else if (pdfUrl.startsWith('/') || pdfUrl.startsWith('http')) {
+          // Fetch as binary array buffer directly for 100% reliable PDF.js parsing
+          try {
+            const res = await fetch(pdfUrl);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            const buf = await res.arrayBuffer();
+            const array = new Uint8Array(buf);
+            
+            // Cache to IndexedDB
+            if (worksheetId) savePdfToLocalCache(worksheetId, array);
+            savePdfToLocalCache(pdfUrl, array);
+
+            loadingTask = pdfjsLib.getDocument({ data: array });
+          } catch (fetchErr) {
+            console.warn('Direct fetch failed, trying pdfjsLib.getDocument(url):', fetchErr);
+            loadingTask = pdfjsLib.getDocument(pdfUrl);
+          }
         } else {
-          // Normal HTTP URL (e.g., /api/pdf/...)
           loadingTask = pdfjsLib.getDocument(pdfUrl);
         }
 
@@ -138,7 +167,7 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [pdfUrl]);
+  }, [pdfUrl, worksheetId]);
 
   // 2. Render a specific page onto its canvas
   const renderPage = useCallback(
