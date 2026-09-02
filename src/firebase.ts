@@ -180,28 +180,28 @@ export async function seedInitialFirestoreData(): Promise<void> {
     const settingsSnap = await getDoc(settingsRef);
     if (!settingsSnap.exists()) {
       await setDoc(settingsRef, sanitizeForFirestore(INITIAL_SETTINGS));
-    }
 
-    const wsSnap = await getDocs(collection(db, WORKSHEETS_COLLECTION));
-    if (wsSnap.empty) {
-      // First try to fetch whatever exists in the server backend
-      let sourceWorksheets: Worksheet[] = INITIAL_SAMPLE_WORKSHEETS;
-      try {
-        const res = await fetch('/api/worksheets');
-        const data = await res.json();
-        if (data && data.success && Array.isArray(data.worksheets) && data.worksheets.length > 0) {
-          sourceWorksheets = data.worksheets;
+      // Seed initial worksheets only on fresh first-time installation
+      const wsSnap = await getDocs(collection(db, WORKSHEETS_COLLECTION));
+      if (wsSnap.empty) {
+        let sourceWorksheets: Worksheet[] = INITIAL_SAMPLE_WORKSHEETS;
+        try {
+          const res = await fetch('/api/worksheets');
+          const data = await res.json();
+          if (data && data.success && Array.isArray(data.worksheets) && data.worksheets.length > 0) {
+            sourceWorksheets = data.worksheets;
+          }
+        } catch {
+          // use fallback sample
         }
-      } catch {
-        // use fallback sample
-      }
 
-      const batch = writeBatch(db);
-      for (const ws of sourceWorksheets) {
-        const ref = doc(db, WORKSHEETS_COLLECTION, ws.id);
-        batch.set(ref, sanitizeForFirestore(ws));
+        const batch = writeBatch(db);
+        for (const ws of sourceWorksheets) {
+          const ref = doc(db, WORKSHEETS_COLLECTION, ws.id);
+          batch.set(ref, sanitizeForFirestore(ws));
+        }
+        await batch.commit();
       }
-      await batch.commit();
     }
   } catch (err) {
     console.warn('Firestore initial seeding error (safe ignore if offline):', err);
@@ -215,15 +215,13 @@ export function subscribeToWorksheets(callback: (worksheets: Worksheet[]) => voi
     return onSnapshot(
       q,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const list: Worksheet[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data();
-            list.push({ ...data, id: docSnap.id } as Worksheet);
-          });
-          const sorted = sortWorksheetsList(list);
-          callback(sorted);
-        }
+        const list: Worksheet[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          list.push({ ...data, id: docSnap.id } as Worksheet);
+        });
+        const sorted = sortWorksheetsList(list);
+        callback(sorted);
       },
       (error) => {
         console.error('Firestore worksheets listener error:', error);

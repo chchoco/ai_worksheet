@@ -19,12 +19,38 @@ import {
 } from './firebase';
 
 const DEFAULT_SETTINGS: ClassSettings = INITIAL_SETTINGS;
-const DEFAULT_WORKSHEETS: Worksheet[] = INITIAL_SAMPLE_WORKSHEETS;
+const DEFAULT_WORKSHEETS: Worksheet[] = [];
 
 export default function App() {
-  const [settings, setSettings] = useState<ClassSettings>(DEFAULT_SETTINGS);
-  const [worksheets, setWorksheets] = useState<Worksheet[]>(DEFAULT_WORKSHEETS);
-  const [selectedWorksheetId, setSelectedWorksheetId] = useState<string>('ws-ai-1');
+  const [settings, setSettings] = useState<ClassSettings>(() => {
+    try {
+      const cached = localStorage.getItem('class_settings_cache');
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return DEFAULT_SETTINGS;
+  });
+
+  const [worksheets, setWorksheets] = useState<Worksheet[]>(() => {
+    try {
+      const cached = localStorage.getItem('class_worksheets_cache');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+
+  const [selectedWorksheetId, setSelectedWorksheetId] = useState<string>(() => {
+    try {
+      const cached = localStorage.getItem('class_worksheets_cache');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed[0].id;
+      }
+    } catch {}
+    return '';
+  });
   const [loading, setLoading] = useState<boolean>(false);
 
   // Routing state
@@ -106,16 +132,14 @@ export default function App() {
 
     // 2. Real-time Worksheets Listener from Firestore (Synchronizes across all browsers instantaneously!)
     const unsubscribeWorksheets = subscribeToWorksheets((realtimeWorksheets) => {
-      if (realtimeWorksheets && realtimeWorksheets.length > 0) {
-        setWorksheets(realtimeWorksheets);
-        safeCacheWorksheets(realtimeWorksheets);
-        setSelectedWorksheetId(curr => {
-          if (!curr || !realtimeWorksheets.some(w => w.id === curr)) {
-            return realtimeWorksheets[0].id;
-          }
-          return curr;
-        });
-      }
+      setWorksheets(realtimeWorksheets);
+      safeCacheWorksheets(realtimeWorksheets);
+      setSelectedWorksheetId(curr => {
+        if (!curr || !realtimeWorksheets.some(w => w.id === curr)) {
+          return realtimeWorksheets.length > 0 ? realtimeWorksheets[0].id : '';
+        }
+        return curr;
+      });
     });
 
     // 3. Real-time Settings Listener from Firestore
@@ -134,7 +158,7 @@ export default function App() {
     fetch('/api/worksheets')
       .then(res => res.json())
       .then(data => {
-        if (data && data.success && Array.isArray(data.worksheets) && data.worksheets.length > 0) {
+        if (data && data.success && Array.isArray(data.worksheets)) {
           setWorksheets(prev => (prev.length === 0 ? data.worksheets : prev));
         }
       })
