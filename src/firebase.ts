@@ -8,8 +8,6 @@ import {
   deleteDoc,
   onSnapshot,
   getDocs,
-  query,
-  orderBy,
   writeBatch,
   getDoc,
 } from 'firebase/firestore';
@@ -27,36 +25,53 @@ export const WORKSHEETS_COLLECTION = 'worksheets';
 export const SETTINGS_COLLECTION = 'settings';
 export const SETTINGS_DOC_ID = 'global_settings';
 
+// Helper to remove any undefined or invalid properties before sending to Firestore
+function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
+  const result: any = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      if (Array.isArray(value)) {
+        result[key] = value.filter(v => v !== undefined);
+      } else if (value !== null && typeof value === 'object') {
+        result[key] = sanitizeForFirestore(value);
+      } else {
+        result[key] = value;
+      }
+    }
+  }
+  return result;
+}
+
 // Sorting helper for worksheets:
 // 1. Unit 1단원 -> 2단원 -> 3단원 -> 4단원
 // 2. Inside unit: orderIndex ascending (first uploaded at the top, later below)
 export function sortWorksheetsList(list: Worksheet[]): Worksheet[] {
   return [...list].sort((a, b) => {
-    const matchA = a.unitTitle.match(/(\d+)\s*단원/);
-    const matchB = b.unitTitle.match(/(\d+)\s*단원/);
+    const matchA = (a.unitTitle || '').match(/(\d+)\s*단원/);
+    const matchB = (b.unitTitle || '').match(/(\d+)\s*단원/);
     const uA = matchA ? parseInt(matchA[1], 10) : 999;
     const uB = matchB ? parseInt(matchB[1], 10) : 999;
     if (uA !== uB) return uA - uB;
 
     if (a.unitTitle !== b.unitTitle) {
-      return a.unitTitle.localeCompare(b.unitTitle, 'ko', { numeric: true });
+      return (a.unitTitle || '').localeCompare(b.unitTitle || '', 'ko', { numeric: true });
     }
 
     if (typeof a.orderIndex === 'number' && typeof b.orderIndex === 'number' && a.orderIndex !== b.orderIndex) {
       return a.orderIndex - b.orderIndex;
     }
 
-    const lesA = a.lessonNumber.match(/(\d+)/);
-    const lesB = b.lessonNumber.match(/(\d+)/);
+    const lesA = (a.lessonNumber || '').match(/(\d+)/);
+    const lesB = (b.lessonNumber || '').match(/(\d+)/);
     const lA = lesA ? parseInt(lesA[1], 10) : 999;
     const lB = lesB ? parseInt(lesB[1], 10) : 999;
     if (lA !== lB) return lA - lB;
 
-    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
   });
 }
 
-// Initial sample data if Firestore is empty
+// Initial sample data if Firestore and backend are empty
 export const INITIAL_SAMPLE_WORKSHEETS: Worksheet[] = [
   {
     id: 'ws-sample-1',
@@ -148,31 +163,43 @@ export const INITIAL_SAMPLE_WORKSHEETS: Worksheet[] = [
 ];
 
 export const INITIAL_SETTINGS: ClassSettings = {
-  schoolName: '인공지능 고등학교',
-  teacherName: '정보 교사',
-  className: '인공지능 기초 (1학기)',
+  schoolName: '전남여자고등학교',
+  teacherName: '정보선생님',
+  className: '2학년 2학기',
   subject: '인공지능 기초',
   announcement: '📢 학습지를 미리 확인하고 수업 전 필기도구와 함께 준비해주세요!',
   allowDirectDownload: true,
   themeColor: 'indigo',
-  teacherPinHash: '1234',
+  teacherPinHash: '5480!!',
 };
 
-// Seed initial data if database is empty
+// Seed initial data if database is empty, syncing from backend if available
 export async function seedInitialFirestoreData(): Promise<void> {
   try {
     const settingsRef = doc(db, SETTINGS_COLLECTION, SETTINGS_DOC_ID);
     const settingsSnap = await getDoc(settingsRef);
     if (!settingsSnap.exists()) {
-      await setDoc(settingsRef, INITIAL_SETTINGS);
+      await setDoc(settingsRef, sanitizeForFirestore(INITIAL_SETTINGS));
     }
 
     const wsSnap = await getDocs(collection(db, WORKSHEETS_COLLECTION));
     if (wsSnap.empty) {
+      // First try to fetch whatever exists in the server backend
+      let sourceWorksheets: Worksheet[] = INITIAL_SAMPLE_WORKSHEETS;
+      try {
+        const res = await fetch('/api/worksheets');
+        const data = await res.json();
+        if (data && data.success && Array.isArray(data.worksheets) && data.worksheets.length > 0) {
+          sourceWorksheets = data.worksheets;
+        }
+      } catch {
+        // use fallback sample
+      }
+
       const batch = writeBatch(db);
-      for (const ws of INITIAL_SAMPLE_WORKSHEETS) {
+      for (const ws of sourceWorksheets) {
         const ref = doc(db, WORKSHEETS_COLLECTION, ws.id);
-        batch.set(ref, ws);
+        batch.set(ref, sanitizeForFirestore(ws));
       }
       await batch.commit();
     }
@@ -184,16 +211,19 @@ export async function seedInitialFirestoreData(): Promise<void> {
 // Real-time listener for worksheets
 export function subscribeToWorksheets(callback: (worksheets: Worksheet[]) => void): () => void {
   try {
-    const q = query(collection(db, WORKSHEETS_COLLECTION));
+    const q = collection(db, WORKSHEETS_COLLECTION);
     return onSnapshot(
       q,
       (snapshot) => {
-        const list: Worksheet[] = [];
-        snapshot.forEach((docSnap) => {
-          list.push({ ...docSnap.data(), id: docSnap.id } as Worksheet);
-        });
-        const sorted = sortWorksheetsList(list);
-        callback(sorted);
+        if (!snapshot.empty) {
+          const list: Worksheet[] = [];
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            list.push({ ...data, id: docSnap.id } as Worksheet);
+          });
+          const sorted = sortWorksheetsList(list);
+          callback(sorted);
+        }
       },
       (error) => {
         console.error('Firestore worksheets listener error:', error);
@@ -241,7 +271,7 @@ export async function firestoreAddWorksheet(wsData: Partial<Worksheet>): Promise
     grade: wsData.grade || '고등학교',
     date: wsData.date || now.split('T')[0],
     description: wsData.description || '',
-    keyPoints: wsData.keyPoints || [],
+    keyPoints: Array.isArray(wsData.keyPoints) ? wsData.keyPoints.filter(Boolean) : [],
     pdfFileName: wsData.pdfFileName || `${wsData.lessonNumber}_${wsData.title}.pdf`,
     pdfDataUrl: wsData.pdfDataUrl || `/api/pdf/${wsId}`,
     fileSizeBytes: wsData.fileSizeBytes || 250000,
@@ -250,8 +280,8 @@ export async function firestoreAddWorksheet(wsData: Partial<Worksheet>): Promise
     answerSheetPdfDataUrl: wsData.answerSheetPdfDataUrl || '',
     answerSheetText: wsData.answerSheetText || '',
     showAnswerSheetToStudents: wsData.showAnswerSheetToStudents ?? true,
-    downloadCount: 0,
-    viewCount: 0,
+    downloadCount: wsData.downloadCount || 0,
+    viewCount: wsData.viewCount || 0,
     createdAt: wsData.createdAt || now,
     updatedAt: now,
     isImportant: !!wsData.isImportant,
@@ -259,17 +289,17 @@ export async function firestoreAddWorksheet(wsData: Partial<Worksheet>): Promise
   };
 
   const docRef = doc(db, WORKSHEETS_COLLECTION, wsId);
-  await setDoc(docRef, newDoc);
+  await setDoc(docRef, sanitizeForFirestore(newDoc));
   return { success: true, id: wsId };
 }
 
 // Update Worksheet in Firestore
 export async function firestoreUpdateWorksheet(id: string, updates: Partial<Worksheet>): Promise<{ success: boolean }> {
   const docRef = doc(db, WORKSHEETS_COLLECTION, id);
-  const dataToUpdate = {
+  const dataToUpdate = sanitizeForFirestore({
     ...updates,
     updatedAt: new Date().toISOString(),
-  };
+  });
   await updateDoc(docRef, dataToUpdate);
   return { success: true };
 }
@@ -304,6 +334,6 @@ export async function firestoreUpdateSettings(newSettings: Partial<ClassSettings
   if (newPin) {
     dataToUpdate.teacherPin = newPin;
   }
-  await setDoc(docRef, dataToUpdate, { merge: true });
+  await setDoc(docRef, sanitizeForFirestore(dataToUpdate), { merge: true });
   return true;
 }

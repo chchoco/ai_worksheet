@@ -287,6 +287,10 @@ export default function App() {
         setSelectedWorksheetId(savedWs.id);
         return { success: true };
       } else {
+        const nextList: Worksheet[] = [...worksheets, savedWs];
+        setWorksheets(nextList);
+        safeCacheWorksheets(nextList);
+        setSelectedWorksheetId(savedWs.id);
         return { success: true };
       }
     } catch (err: any) {

@@ -477,8 +477,10 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     await onReorderWorksheets(sorted);
   };
 
-  // Combined list of all units
-  const allAvailableUnits = Array.from(new Set([...DEFAULT_AI_UNITS, ...existingUnits])).filter(Boolean);
+  // Combined list of all units (defaults + props + any units in current worksheets)
+  const allAvailableUnits = Array.from(
+    new Set([...DEFAULT_AI_UNITS, ...(existingUnits || []), ...worksheets.map(w => w.unitTitle)])
+  ).filter(Boolean);
 
   // If Not Authenticated, show secure password entry screen
   if (!isTeacherMode) {
