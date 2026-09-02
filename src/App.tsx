@@ -112,9 +112,23 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // Safe cache without heavy base64 to avoid localStorage quota crash
+  const safeCacheWorksheets = (list: Worksheet[]) => {
+    try {
+      const sanitized = list.map(w => ({
+        ...w,
+        pdfDataUrl: w.pdfDataUrl && w.pdfDataUrl.length > 500 ? '' : w.pdfDataUrl,
+        answerSheetPdfDataUrl: w.answerSheetPdfDataUrl && w.answerSheetPdfDataUrl.length > 500 ? '' : w.answerSheetPdfDataUrl,
+      }));
+      localStorage.setItem('class_worksheets_cache', JSON.stringify(sanitized));
+    } catch (e) {
+      console.warn('localStorage cache failed:', e);
+    }
+  };
+
   // Load Initial Data
   const fetchData = useCallback(async () => {
-    // 1. First check localStorage cache
+    // 1. First check localStorage cache for fast instant render
     try {
       const cachedSettings = localStorage.getItem('class_settings_cache');
       if (cachedSettings) {
@@ -144,7 +158,11 @@ export default function App() {
         const settingsData = await settingsRes.json().catch(() => null);
         if (settingsData && settingsData.success && settingsData.settings) {
           setSettings(settingsData.settings);
-          localStorage.setItem('class_settings_cache', JSON.stringify(settingsData.settings));
+          try {
+            localStorage.setItem('class_settings_cache', JSON.stringify(settingsData.settings));
+          } catch {
+            // ignore
+          }
         }
       }
 
@@ -153,7 +171,7 @@ export default function App() {
         if (worksheetsData && worksheetsData.success && Array.isArray(worksheetsData.worksheets) && worksheetsData.worksheets.length > 0) {
           const list: Worksheet[] = worksheetsData.worksheets;
           setWorksheets(list);
-          localStorage.setItem('class_worksheets_cache', JSON.stringify(list));
+          safeCacheWorksheets(list);
 
           const urlParams = new URLSearchParams(window.location.search);
           const wsParam = urlParams.get('worksheet');
@@ -184,6 +202,30 @@ export default function App() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Periodic background polling every 5s so all browsers/students see updates in real-time
+  useEffect(() => {
+    const pollInterval = setInterval(() => {
+      fetch('/api/worksheets')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.success && Array.isArray(data.worksheets)) {
+            setWorksheets(prev => {
+              const prevSig = prev.map(w => `${w.id}_${w.orderIndex}_${w.updatedAt}`).join('|');
+              const nextSig = data.worksheets.map((w: Worksheet) => `${w.id}_${w.orderIndex}_${w.updatedAt}`).join('|');
+              if (prevSig !== nextSig) {
+                safeCacheWorksheets(data.worksheets);
+                return data.worksheets;
+              }
+              return prev;
+            });
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+
+    return () => clearInterval(pollInterval);
+  }, []);
 
   // Worksheet selection in student view
   const handleSelectWorksheet = async (id: string) => {
@@ -274,46 +316,6 @@ export default function App() {
 
   // Teacher Add Worksheet
   const handleAddWorksheet = async (wsData: Partial<Worksheet>): Promise<{ success: boolean; message?: string }> => {
-    const now = new Date().toISOString();
-    const localWs: Worksheet = {
-      id: `ws-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-      unitId: wsData.unitId || `unit-${encodeURIComponent(wsData.unitTitle || '1단원')}`,
-      unitTitle: (wsData.unitTitle || '1단원').trim(),
-      lessonNumber: (wsData.lessonNumber || '1차시').trim(),
-      title: (wsData.title || '새 학습지').trim(),
-      subject: wsData.subject || settings.subject || '인공지능 기초',
-      grade: wsData.grade || settings.className,
-      date: wsData.date || new Date().toISOString().split('T')[0],
-      description: wsData.description || '',
-      keyPoints: wsData.keyPoints || [],
-      pdfFileName: wsData.pdfFileName || `${wsData.lessonNumber}_${wsData.title}.pdf`,
-      pdfDataUrl: wsData.pdfDataUrl || '',
-      fileSizeBytes: wsData.fileSizeBytes || 50000,
-      pageCount: wsData.pageCount || 2,
-      hasAnswerSheet: !!wsData.hasAnswerSheet,
-      answerSheetPdfDataUrl: wsData.answerSheetPdfDataUrl || '',
-      answerSheetText: wsData.answerSheetText || '',
-      showAnswerSheetToStudents: !!wsData.showAnswerSheetToStudents,
-      downloadCount: 0,
-      viewCount: 0,
-      createdAt: now,
-      updatedAt: now,
-      isImportant: !!wsData.isImportant,
-    };
-
-    // Update local state and localStorage immediately
-    setWorksheets(prev => {
-      const next = [localWs, ...prev];
-      try {
-        localStorage.setItem('class_worksheets_cache', JSON.stringify(next));
-      } catch {
-        // ignore
-      }
-      return next;
-    });
-    setSelectedWorksheetId(localWs.id);
-
-    // Sync to backend
     try {
       const pinToUse = getActiveTeacherPin();
       const res = await fetch('/api/worksheets', {
@@ -322,37 +324,52 @@ export default function App() {
         body: JSON.stringify({ pin: pinToUse, worksheet: wsData }),
       });
       const data = await res.json().catch(() => null);
-      if (res.ok && data && data.success && data.worksheet) {
-        setWorksheets(prev => {
-          const updated = prev.map(w => (w.id === localWs.id ? data.worksheet : w));
-          try {
-            localStorage.setItem('class_worksheets_cache', JSON.stringify(updated));
-          } catch {
-            // ignore
-          }
-          return updated;
-        });
+      if (res.ok && data && data.success) {
+        const nextList: Worksheet[] = data.worksheets || [...worksheets, data.worksheet];
+        setWorksheets(nextList);
+        safeCacheWorksheets(nextList);
+        if (data.worksheet?.id) {
+          setSelectedWorksheetId(data.worksheet.id);
+        }
+        return { success: true };
+      } else {
+        return { success: false, message: data?.message || '학습지 등록에 실패했습니다.' };
       }
     } catch (err: any) {
-      console.warn('Backend sync failed, saved locally:', err);
+      console.error('Backend add worksheet error:', err);
+      return { success: false, message: '서버와의 통신에 실패했습니다.' };
     }
+  };
 
+  // Teacher Reorder Worksheets
+  const handleReorderWorksheets = async (newOrderedList: Worksheet[]): Promise<{ success: boolean; message?: string }> => {
+    setWorksheets(newOrderedList);
+    safeCacheWorksheets(newOrderedList);
+
+    try {
+      const pinToUse = getActiveTeacherPin();
+      const res = await fetch('/api/worksheets/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pin: pinToUse,
+          worksheetIds: newOrderedList.map(w => w.id),
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && data.success && Array.isArray(data.worksheets)) {
+        setWorksheets(data.worksheets);
+        safeCacheWorksheets(data.worksheets);
+        return { success: true };
+      }
+    } catch (err) {
+      console.warn('Backend reorder error:', err);
+    }
     return { success: true };
   };
 
   // Teacher Update Worksheet
   const handleUpdateWorksheet = async (id: string, updates: Partial<Worksheet>): Promise<{ success: boolean; message?: string }> => {
-    // Update local state immediately
-    setWorksheets(prev => {
-      const next = prev.map(w => (w.id === id ? { ...w, ...updates, updatedAt: new Date().toISOString() } : w));
-      try {
-        localStorage.setItem('class_worksheets_cache', JSON.stringify(next));
-      } catch {
-        // ignore
-      }
-      return next;
-    });
-
     try {
       const pinToUse = getActiveTeacherPin();
       const res = await fetch(`/api/worksheets/${id}`, {
@@ -361,45 +378,61 @@ export default function App() {
         body: JSON.stringify({ pin: pinToUse, updates }),
       });
       const data = await res.json().catch(() => null);
-      if (res.ok && data && data.success && data.worksheet) {
-        setWorksheets(prev => prev.map(w => (w.id === id ? data.worksheet : w)));
+      if (res.ok && data && data.success) {
+        if (Array.isArray(data.worksheets)) {
+          setWorksheets(data.worksheets);
+          safeCacheWorksheets(data.worksheets);
+        } else if (data.worksheet) {
+          setWorksheets(prev => {
+            const next = prev.map(w => (w.id === id ? data.worksheet : w));
+            safeCacheWorksheets(next);
+            return next;
+          });
+        }
+        return { success: true };
+      } else {
+        return { success: false, message: data?.message || '수정에 실패했습니다.' };
       }
     } catch (err: any) {
-      console.warn('Backend sync failed, saved locally:', err);
+      console.error('Update worksheet error:', err);
+      return { success: false, message: '서버와의 통신에 실패했습니다.' };
     }
-
-    return { success: true };
   };
 
   // Teacher Delete Worksheet
   const handleDeleteWorksheet = async (id: string): Promise<boolean> => {
     if (!window.confirm('정말 이 학습지를 삭제하시겠습니까?')) return false;
 
-    setWorksheets(prev => {
-      const next = prev.filter(w => w.id !== id);
-      try {
-        localStorage.setItem('class_worksheets_cache', JSON.stringify(next));
-      } catch {
-        // ignore
-      }
-      if (selectedWorksheetId === id && next.length > 0) {
-        setSelectedWorksheetId(next[0].id);
-      }
-      return next;
-    });
-
     try {
       const pinToUse = getActiveTeacherPin();
-      await fetch(`/api/worksheets/${id}`, {
+      const res = await fetch(`/api/worksheets/${id}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: pinToUse }),
       });
-    } catch {
-      // ignore
-    }
+      const data = await res.json().catch(() => null);
 
-    return true;
+      if (res.ok && data && data.success && Array.isArray(data.worksheets)) {
+        setWorksheets(data.worksheets);
+        safeCacheWorksheets(data.worksheets);
+        if (selectedWorksheetId === id && data.worksheets.length > 0) {
+          setSelectedWorksheetId(data.worksheets[0].id);
+        }
+      } else {
+        setWorksheets(prev => {
+          const next = prev.filter(w => w.id !== id);
+          safeCacheWorksheets(next);
+          if (selectedWorksheetId === id && next.length > 0) {
+            setSelectedWorksheetId(next[0].id);
+          }
+          return next;
+        });
+      }
+      return true;
+    } catch (err) {
+      console.warn('Delete failed:', err);
+      return false;
+    }
   };
 
   // Teacher Update Settings
@@ -490,6 +523,7 @@ export default function App() {
         onAddWorksheet={handleAddWorksheet}
         onUpdateWorksheet={handleUpdateWorksheet}
         onDeleteWorksheet={handleDeleteWorksheet}
+        onReorderWorksheets={handleReorderWorksheets}
         onUpdateSettings={handleUpdateSettings}
         onResetSample={handleResetSample}
         worksheets={worksheets}

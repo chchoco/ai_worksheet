@@ -64,6 +64,7 @@ interface Worksheet {
   createdAt: string;
   updatedAt: string;
   isImportant?: boolean;
+  orderIndex?: number;
 }
 
 interface ClassSettings {
@@ -80,6 +81,57 @@ interface ClassSettings {
 interface DBState {
   settings: ClassSettings;
   worksheets: Worksheet[];
+}
+
+// Extract numerical unit index (e.g., "1단원..." -> 1, "2단원..." -> 2)
+function getUnitSortKey(unitTitle: string): number {
+  const match = unitTitle.match(/(\d+)\s*단원/);
+  if (match) return parseInt(match[1], 10);
+  if (unitTitle.includes('1단원')) return 1;
+  if (unitTitle.includes('2단원')) return 2;
+  if (unitTitle.includes('3단원')) return 3;
+  if (unitTitle.includes('4단원')) return 4;
+  return 999;
+}
+
+// Extract numerical lesson index (e.g., "1차시" -> 1, "2차시" -> 2)
+function getLessonSortKey(lessonNumber: string): number {
+  const match = lessonNumber.match(/(\d+)/);
+  if (match) return parseInt(match[1], 10);
+  return 999;
+}
+
+// Sort worksheets: Unit order (1단원 -> 2단원 -> 3단원 -> 4단원)
+// Inside each unit: orderIndex ascending (or earlier created on top, later created below)
+function sortWorksheets(list: Worksheet[]): Worksheet[] {
+  return [...list].sort((a, b) => {
+    // 1. Unit Number Comparison (1단원, 2단원, 3단원, 4단원...)
+    const unitA = getUnitSortKey(a.unitTitle);
+    const unitB = getUnitSortKey(b.unitTitle);
+    if (unitA !== unitB) {
+      return unitA - unitB;
+    }
+    if (a.unitTitle !== b.unitTitle) {
+      return a.unitTitle.localeCompare(b.unitTitle, 'ko', { numeric: true });
+    }
+
+    // 2. Explicit orderIndex if defined
+    if (typeof a.orderIndex === 'number' && typeof b.orderIndex === 'number' && a.orderIndex !== b.orderIndex) {
+      return a.orderIndex - b.orderIndex;
+    }
+
+    // 3. Lesson Number (1차시, 2차시...)
+    const lessonA = getLessonSortKey(a.lessonNumber);
+    const lessonB = getLessonSortKey(b.lessonNumber);
+    if (lessonA !== lessonB) {
+      return lessonA - lessonB;
+    }
+
+    // 4. Default: Earlier created first (top), newer created below
+    const timeA = new Date(a.createdAt).getTime();
+    const timeB = new Date(b.createdAt).getTime();
+    return timeA - timeB;
+  });
 }
 
 // Sample initial starter worksheets for realistic preview
@@ -238,7 +290,7 @@ app.post('/api/teacher/settings', (req, res) => {
 app.get('/api/worksheets', (req, res) => {
   const { search, unit, sort } = req.query;
   const db = readDB();
-  let list = [...db.worksheets];
+  let list = sortWorksheets(db.worksheets);
 
   if (unit && typeof unit === 'string' && unit !== 'all') {
     list = list.filter(w => w.unitTitle === unit || w.unitId === unit);
@@ -255,20 +307,45 @@ app.get('/api/worksheets', (req, res) => {
     );
   }
 
-  // Sort by date / order
   if (sort === 'oldest') {
     list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-  } else {
-    // Default newest or unit/lesson ordering
-    list.sort((a, b) => {
-      if (a.unitTitle === b.unitTitle) {
-        return a.lessonNumber.localeCompare(b.lessonNumber, 'ko', { numeric: true });
-      }
-      return a.unitTitle.localeCompare(b.unitTitle, 'ko', { numeric: true });
-    });
+  } else if (sort === 'newest') {
+    list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   res.json({ success: true, worksheets: list });
+});
+
+// 4.1. Reorder worksheets (Teacher)
+app.post('/api/worksheets/reorder', (req, res) => {
+  try {
+    const { pin, worksheetIds } = req.body;
+    const db = readDB();
+
+    if (!checkTeacherPin(pin, db.settings.teacherPin)) {
+      return res.status(401).json({ success: false, message: '선생님 인증이 필요합니다.' });
+    }
+
+    if (!Array.isArray(worksheetIds) || worksheetIds.length === 0) {
+      return res.status(400).json({ success: false, message: '학습지 순서 목록이 올바르지 않습니다.' });
+    }
+
+    // Update orderIndex for each worksheet according to the given order
+    worksheetIds.forEach((id: string, index: number) => {
+      const item = db.worksheets.find(w => w.id === id);
+      if (item) {
+        item.orderIndex = index + 1;
+        item.updatedAt = new Date().toISOString();
+      }
+    });
+
+    writeDB(db);
+    const sorted = sortWorksheets(db.worksheets);
+    res.json({ success: true, worksheets: sorted });
+  } catch (err: any) {
+    console.error('Error reordering worksheets:', err);
+    res.status(500).json({ success: false, message: '순서 저장 중 오류가 발생했습니다.' });
+  }
 });
 
 // 5. Get distinct units list
@@ -417,6 +494,11 @@ app.post('/api/worksheets', (req, res) => {
     }
   }
 
+  // Place new worksheet at the bottom of its unit (higher orderIndex)
+  const sameUnitWorksheets = db.worksheets.filter(w => w.unitTitle === worksheet.unitTitle.trim());
+  const maxOrder = sameUnitWorksheets.reduce((max, w) => Math.max(max, w.orderIndex ?? 0), 0);
+  const newOrderIndex = maxOrder + 1;
+
   const newWorksheet: Worksheet = {
     id: wsId,
     unitId: worksheet.unitId || `unit-${encodeURIComponent(worksheet.unitTitle)}`,
@@ -441,12 +523,14 @@ app.post('/api/worksheets', (req, res) => {
     createdAt: now,
     updatedAt: now,
     isImportant: !!worksheet.isImportant,
+    orderIndex: newOrderIndex,
   };
 
-  db.worksheets.unshift(newWorksheet);
+  db.worksheets.push(newWorksheet);
   writeDB(db);
 
-  res.json({ success: true, worksheet: newWorksheet });
+  const sortedList = sortWorksheets(db.worksheets);
+  res.json({ success: true, worksheet: newWorksheet, worksheets: sortedList });
 });
 
 // 9. Update Worksheet (Teacher)
@@ -471,7 +555,8 @@ app.put('/api/worksheets/:id', (req, res) => {
   };
 
   writeDB(db);
-  res.json({ success: true, worksheet: db.worksheets[index] });
+  const sortedList = sortWorksheets(db.worksheets);
+  res.json({ success: true, worksheet: db.worksheets[index], worksheets: sortedList });
 });
 
 // 10. Delete Worksheet (Teacher)
@@ -492,7 +577,8 @@ app.delete('/api/worksheets/:id', (req, res) => {
   }
 
   writeDB(db);
-  res.json({ success: true, message: '학습지가 삭제되었습니다.' });
+  const sortedList = sortWorksheets(db.worksheets);
+  res.json({ success: true, message: '학습지가 삭제되었습니다.', worksheets: sortedList });
 });
 
 // 11. Reset DB to initial sample data

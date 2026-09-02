@@ -25,6 +25,10 @@ import {
   School,
   ShieldCheck,
   Megaphone,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+  ListOrdered,
 } from 'lucide-react';
 import { Worksheet, ClassSettings } from '../types';
 import { formatBytes, formatDate } from '../utils/pdfHelper';
@@ -38,6 +42,7 @@ interface TeacherAdminPageProps {
   onAddWorksheet: (wsData: Partial<Worksheet>) => Promise<{ success: boolean; message?: string } | boolean>;
   onUpdateWorksheet: (id: string, updates: Partial<Worksheet>) => Promise<{ success: boolean; message?: string } | boolean>;
   onDeleteWorksheet: (id: string) => Promise<boolean>;
+  onReorderWorksheets?: (newOrderedList: Worksheet[]) => Promise<{ success: boolean; message?: string } | boolean>;
   onUpdateSettings: (newSettings: Partial<ClassSettings>, newPin?: string) => Promise<{ success: boolean; message?: string } | boolean>;
   onResetSample: () => Promise<boolean>;
   worksheets: Worksheet[];
@@ -53,6 +58,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
   onAddWorksheet,
   onUpdateWorksheet,
   onDeleteWorksheet,
+  onReorderWorksheets,
   onUpdateSettings,
   onResetSample,
   worksheets,
@@ -64,6 +70,7 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
   const [pinError, setPinError] = useState<string>('');
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'upload' | 'manage' | 'settings'>('upload');
+  const [manageUnitFilter, setManageUnitFilter] = useState<string>('all');
 
   // Form State for New / Edit Worksheet
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -366,6 +373,72 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     } else {
       setFeedbackMsg({ type: 'error', text: errorMsg });
     }
+  };
+
+  // Move worksheet up or down in order
+  const handleMoveWorksheet = async (wsId: string, direction: 'up' | 'down') => {
+    if (!onReorderWorksheets) return;
+
+    const targetWs = worksheets.find(w => w.id === wsId);
+    if (!targetWs) return;
+
+    // Filter list for the same unit to keep unit integrity
+    const unitWorksheets = worksheets.filter(w => w.unitTitle === targetWs.unitTitle);
+    const unitIndex = unitWorksheets.findIndex(w => w.id === wsId);
+
+    if (direction === 'up' && unitIndex === 0) return;
+    if (direction === 'down' && unitIndex === unitWorksheets.length - 1) return;
+
+    const swapTarget = direction === 'up' ? unitWorksheets[unitIndex - 1] : unitWorksheets[unitIndex + 1];
+    if (!swapTarget) return;
+
+    // Create new full worksheets array with swapped positions
+    const newWorksheets = [...worksheets];
+    const indexA = newWorksheets.findIndex(w => w.id === targetWs.id);
+    const indexB = newWorksheets.findIndex(w => w.id === swapTarget.id);
+
+    if (indexA === -1 || indexB === -1) return;
+
+    const temp = newWorksheets[indexA];
+    newWorksheets[indexA] = newWorksheets[indexB];
+    newWorksheets[indexB] = temp;
+
+    // Reassign orderIndex
+    const reordered = newWorksheets.map((w, idx) => ({
+      ...w,
+      orderIndex: idx + 1,
+    }));
+
+    setFeedbackMsg({ type: 'success', text: '학습지 순서가 변경되어 서버에 저장되었습니다.' });
+    setTimeout(() => setFeedbackMsg(null), 3000);
+
+    await onReorderWorksheets(reordered);
+  };
+
+  // Quick auto-sort by lesson number (1차시 -> 2차시 -> 3차시)
+  const handleAutoSortByLesson = async () => {
+    if (!onReorderWorksheets) return;
+    if (!window.confirm('모든 학습지를 1단원→2단원 및 1차시→2차시 오름차순(처음 올린 순)으로 자동 정렬하시겠습니까?')) return;
+
+    const sorted = [...worksheets].sort((a, b) => {
+      const matchUnitA = a.unitTitle.match(/(\d+)/);
+      const matchUnitB = b.unitTitle.match(/(\d+)/);
+      const uA = matchUnitA ? parseInt(matchUnitA[1], 10) : 999;
+      const uB = matchUnitB ? parseInt(matchUnitB[1], 10) : 999;
+      if (uA !== uB) return uA - uB;
+
+      const matchLesA = a.lessonNumber.match(/(\d+)/);
+      const matchLesB = b.lessonNumber.match(/(\d+)/);
+      const lA = matchLesA ? parseInt(matchLesA[1], 10) : 999;
+      const lB = matchLesB ? parseInt(matchLesB[1], 10) : 999;
+      if (lA !== lB) return lA - lB;
+
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    }).map((w, idx) => ({ ...w, orderIndex: idx + 1 }));
+
+    setFeedbackMsg({ type: 'success', text: '차시 순서대로 자동 정렬되었습니다.' });
+    setTimeout(() => setFeedbackMsg(null), 3000);
+    await onReorderWorksheets(sorted);
   };
 
   // Combined list of all units
@@ -876,23 +949,68 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
 
         {/* TAB 2: MANAGE WORKSHEETS */}
         {activeTab === 'manage' && (
-          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-5 mb-6 border-b border-slate-100">
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100">
               <div>
                 <h2 className="text-xl font-black text-slate-900 tracking-tight flex items-center gap-2">
                   <Layers className="w-5 h-5 text-indigo-600" />
-                  등록된 학습지 목록 및 관리 ({worksheets.length}개)
+                  등록된 학습지 목록 및 순서 조정 ({worksheets.length}개)
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  수정, 삭제 및 학생 공개 여부를 제어할 수 있습니다.
+                  단원 내에서 ▲/▼ 버튼을 눌러 학습지 순서를 자유롭게 변경할 수 있습니다. (처음 올린 학습지가 위, 나중에 올린 학습지가 아래로 배치됩니다)
                 </p>
               </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAutoSortByLesson}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="1단원→2단원 및 1차시→2차시 순서로 자동 재정렬"
+                >
+                  <ListOrdered className="w-3.5 h-3.5 text-indigo-600" />
+                  차시 순서로 자동 정렬
+                </button>
+                <button
+                  onClick={() => setActiveTab('upload')}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" /> 새 학습지 등록
+                </button>
+              </div>
+            </div>
+
+            {/* Unit Filter */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-slate-600 mr-1">단원 필터:</span>
               <button
-                onClick={() => setActiveTab('upload')}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                type="button"
+                onClick={() => setManageUnitFilter('all')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  manageUnitFilter === 'all'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
               >
-                <Plus className="w-4 h-4" /> 새 학습지 등록
+                전체 단원 ({worksheets.length})
               </button>
+              {allAvailableUnits.map(unit => {
+                const count = worksheets.filter(w => w.unitTitle === unit).length;
+                return (
+                  <button
+                    key={unit}
+                    type="button"
+                    onClick={() => setManageUnitFilter(unit)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      manageUnitFilter === unit
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {unit} ({count})
+                  </button>
+                );
+              })}
             </div>
 
             {worksheets.length === 0 ? (
@@ -904,72 +1022,138 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {worksheets.map((ws, idx) => (
-                  <div
-                    key={ws.id}
-                    className="p-4 bg-slate-50/70 hover:bg-slate-50 border border-slate-200/80 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 mb-1.5">
-                        <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
-                          {ws.unitTitle}
-                        </span>
-                        <span className="text-[11px] font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
-                          {ws.lessonNumber}
-                        </span>
-                        <span className="text-[11px] text-slate-500 flex items-center gap-1">
-                          <Calendar className="w-3 h-3" />
-                          {formatDate(ws.date)}
-                        </span>
-                        <span className="text-[11px] text-slate-400">
-                          ({formatBytes(ws.fileSizeBytes)})
-                        </span>
-                      </div>
-                      <h3 className="text-sm font-bold text-slate-900 truncate">
-                        {ws.title}
-                      </h3>
-                      <div className="flex items-center gap-3 mt-2 text-[11px] text-slate-500">
-                        <span className="flex items-center gap-1">
-                          <Download className="w-3 h-3 text-slate-400" />
-                          다운로드 {ws.downloadCount}회
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Eye className="w-3 h-3 text-slate-400" />
-                          열람 {ws.viewCount}회
-                        </span>
-                        {ws.hasAnswerSheet && (
-                          <span
-                            className={`px-1.5 py-0.2 rounded font-semibold border ${
-                              ws.showAnswerSheetToStudents
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : 'bg-slate-200 text-slate-700 border-slate-300'
-                            }`}
-                          >
-                            해설 {ws.showAnswerSheetToStudents ? '공개' : '비공개'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
+              <div className="space-y-6">
+                {allAvailableUnits
+                  .filter(unit => manageUnitFilter === 'all' || manageUnitFilter === unit)
+                  .map(unit => {
+                    const unitWorksheets = worksheets.filter(w => w.unitTitle === unit);
+                    if (unitWorksheets.length === 0 && manageUnitFilter !== 'all') {
+                      return (
+                        <div key={unit} className="p-6 bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-center">
+                          <p className="text-xs text-slate-400 font-medium">이 단원에 등록된 학습지가 없습니다.</p>
+                        </div>
+                      );
+                    }
+                    if (unitWorksheets.length === 0) return null;
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        onClick={() => handleStartEdit(ws)}
-                        className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
-                      >
-                        <Edit className="w-3.5 h-3.5 text-amber-600" />
-                        수정
-                      </button>
-                      <button
-                        onClick={() => onDeleteWorksheet(ws.id)}
-                        className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-xl text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                        삭제
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                    return (
+                      <div key={unit} className="bg-slate-50/60 rounded-2xl p-4 border border-slate-200/80 space-y-3">
+                        <div className="flex items-center justify-between px-1">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-indigo-600" />
+                            <h3 className="text-sm font-black text-slate-900">{unit}</h3>
+                          </div>
+                          <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                            총 {unitWorksheets.length}개 차시
+                          </span>
+                        </div>
+
+                        <div className="space-y-2.5">
+                          {unitWorksheets.map((ws, uIdx) => {
+                            const isFirstInUnit = uIdx === 0;
+                            const isLastInUnit = uIdx === unitWorksheets.length - 1;
+
+                            return (
+                              <div
+                                key={ws.id}
+                                className="p-3.5 bg-white hover:bg-slate-50/90 border border-slate-200/90 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs transition-all"
+                              >
+                                <div className="flex items-start md:items-center gap-3 min-w-0 flex-1">
+                                  {/* Sequence Number Badge */}
+                                  <span className="w-7 h-7 rounded-lg bg-slate-100 text-slate-700 text-xs font-black flex items-center justify-center shrink-0 border border-slate-200">
+                                    #{uIdx + 1}
+                                  </span>
+
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                                      <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                                        {ws.lessonNumber}
+                                      </span>
+                                      <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                                        <Calendar className="w-3 h-3" />
+                                        {formatDate(ws.date)}
+                                      </span>
+                                      <span className="text-[11px] text-slate-400">
+                                        ({formatBytes(ws.fileSizeBytes)})
+                                      </span>
+                                    </div>
+                                    <h4 className="text-sm font-bold text-slate-900 truncate">
+                                      {ws.title}
+                                    </h4>
+                                    <div className="flex items-center gap-3 mt-1.5 text-[11px] text-slate-500">
+                                      <span className="flex items-center gap-1">
+                                        <Download className="w-3 h-3 text-slate-400" />
+                                        다운로드 {ws.downloadCount}회
+                                      </span>
+                                      <span className="flex items-center gap-1">
+                                        <Eye className="w-3 h-3 text-slate-400" />
+                                        열람 {ws.viewCount}회
+                                      </span>
+                                      {ws.hasAnswerSheet && (
+                                        <span
+                                          className={`px-1.5 py-0.2 rounded font-semibold border ${
+                                            ws.showAnswerSheetToStudents
+                                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                              : 'bg-slate-200 text-slate-700 border-slate-300'
+                                          }`}
+                                        >
+                                          해설 {ws.showAnswerSheetToStudents ? '공개' : '비공개'}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Action Buttons: Up/Down Order + Edit + Delete */}
+                                <div className="flex items-center gap-1.5 shrink-0 self-end md:self-center">
+                                  {/* Move Up */}
+                                  <button
+                                    type="button"
+                                    disabled={isFirstInUnit}
+                                    onClick={() => handleMoveWorksheet(ws.id, 'up')}
+                                    className="p-1.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-30 disabled:pointer-events-none rounded-lg text-slate-600 transition-colors border border-slate-200 cursor-pointer"
+                                    title="단원 내에서 위로 이동"
+                                  >
+                                    <ArrowUp className="w-4 h-4" />
+                                  </button>
+
+                                  {/* Move Down */}
+                                  <button
+                                    type="button"
+                                    disabled={isLastInUnit}
+                                    onClick={() => handleMoveWorksheet(ws.id, 'down')}
+                                    className="p-1.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-30 disabled:pointer-events-none rounded-lg text-slate-600 transition-colors border border-slate-200 cursor-pointer"
+                                    title="단원 내에서 아래로 이동"
+                                  >
+                                    <ArrowDown className="w-4 h-4" />
+                                  </button>
+
+                                  <div className="w-px h-5 bg-slate-200 mx-1" />
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEdit(ws)}
+                                    className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                                  >
+                                    <Edit className="w-3.5 h-3.5 text-amber-600" />
+                                    수정
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => onDeleteWorksheet(ws.id)}
+                                    className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                    삭제
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
               </div>
             )}
           </div>

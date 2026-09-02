@@ -22,6 +22,7 @@ export interface Worksheet {
   createdAt: string;
   updatedAt: string;
   isImportant?: boolean;
+  orderIndex?: number;
 }
 
 export interface UnitGroup {
