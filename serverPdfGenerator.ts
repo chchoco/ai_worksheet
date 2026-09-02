@@ -1,5 +1,25 @@
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 
+export function uint8ArrayToBase64(bytes: Uint8Array): string {
+  if (typeof window === 'undefined' && typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64');
+  }
+  let binary = '';
+  const len = bytes.byteLength;
+  const chunkSize = 8192;
+  for (let i = 0; i < len; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
+    binary += String.fromCharCode.apply(null, chunk as any);
+  }
+  if (typeof btoa !== 'undefined') {
+    return btoa(binary);
+  }
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64');
+  }
+  return '';
+}
+
 export async function generateStandardWorksheetPdfBase64(): Promise<string> {
   const pdfDoc = await PDFDocument.create();
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -163,6 +183,6 @@ export async function generateStandardWorksheetPdfBase64(): Promise<string> {
   });
 
   const pdfBytes = await pdfDoc.save();
-  const buffer = Buffer.from(pdfBytes);
-  return `data:application/pdf;base64,${buffer.toString('base64')}`;
+  const base64 = uint8ArrayToBase64(pdfBytes);
+  return `data:application/pdf;base64,${base64}`;
 }
