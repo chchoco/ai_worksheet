@@ -62,7 +62,7 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
   };
 
   const handleOpenNewTab = () => {
-    openPdfInNewTab(worksheet.pdfDataUrl, worksheet.id);
+    openPdfInNewTab(worksheet.pdfDataUrl, worksheet.id, worksheet.pdfFileName);
   };
 
   const toggleFullscreen = () => setIsFullscreen(prev => !prev);
@@ -211,6 +211,7 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
                 key={worksheet.id}
                 pdfUrl={pdfSourceUrl}
                 worksheetId={worksheet.id}
+                fileName={worksheet.pdfFileName}
                 title={worksheet.title}
                 onOpenNewTab={handleOpenNewTab}
                 onDownload={handleDownload}

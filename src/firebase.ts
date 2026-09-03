@@ -435,19 +435,77 @@ export async function savePdfToCloudStorage(
 
 /**
  * Retrieve PDF Blob from Firestore Cloud PDF Storage
+ * Supports multi-candidate lookup (with/without .pdf, fileName, title, etc.)
  */
-export async function getPdfFromCloudStorage(id: string): Promise<Blob | null> {
+export async function getPdfFromCloudStorage(
+  id: string,
+  fallbackIdentifiers?: (string | undefined | null)[]
+): Promise<Blob | null> {
   try {
-    const cleanId = id.replace(/^[\uFEFF\s]+/, '').trim();
-    if (!cleanId) return null;
+    const candidates: string[] = [];
+    const addCandidate = (str?: string | null) => {
+      if (!str) return;
+      const clean = str.replace(/^[\uFEFF\s]+/, '').trim();
+      if (!clean) return;
+      if (!candidates.includes(clean)) candidates.push(clean);
+      if (!clean.endsWith('.pdf')) {
+        const withPdf = `${clean}.pdf`;
+        if (!candidates.includes(withPdf)) candidates.push(withPdf);
+      } else {
+        const withoutPdf = clean.replace(/\.pdf$/, '');
+        if (!candidates.includes(withoutPdf)) candidates.push(withoutPdf);
+      }
+    };
 
-    const metaRef = doc(db, PDF_STORAGE_COLLECTION, cleanId);
-    const metaSnap = await getDoc(metaRef);
-    if (!metaSnap.exists()) {
+    addCandidate(id);
+    if (fallbackIdentifiers && Array.isArray(fallbackIdentifiers)) {
+      fallbackIdentifiers.forEach(addCandidate);
+    }
+
+    // 1. Try candidates in order
+    let targetDocId: string | null = null;
+    for (const cand of candidates) {
+      const metaRef = doc(db, PDF_STORAGE_COLLECTION, cand);
+      const metaSnap = await getDoc(metaRef);
+      if (metaSnap.exists()) {
+        targetDocId = cand;
+        break;
+      }
+    }
+
+    // 2. If not found by direct lookup, scan pdf_storage collection
+    if (!targetDocId) {
+      try {
+        const allPdfSnap = await getDocs(collection(db, PDF_STORAGE_COLLECTION));
+        for (const d of allPdfSnap.docs) {
+          const docId = d.id;
+          const data = d.data();
+          const storedFileName = (data.fileName || '').replace(/^[\uFEFF\s]+/, '').trim();
+
+          for (const cand of candidates) {
+            if (
+              docId === cand ||
+              docId.includes(cand) ||
+              cand.includes(docId.replace(/\.pdf$/, '')) ||
+              storedFileName === cand ||
+              (storedFileName && cand && (storedFileName.includes(cand) || cand.includes(storedFileName)))
+            ) {
+              targetDocId = docId;
+              break;
+            }
+          }
+          if (targetDocId) break;
+        }
+      } catch (scanErr) {
+        console.warn('Could not scan pdf_storage:', scanErr);
+      }
+    }
+
+    if (!targetDocId) {
       return null;
     }
 
-    const chunksColRef = collection(db, PDF_STORAGE_COLLECTION, cleanId, 'chunks');
+    const chunksColRef = collection(db, PDF_STORAGE_COLLECTION, targetDocId, 'chunks');
     const chunksSnap = await getDocs(chunksColRef);
     if (chunksSnap.empty) {
       return null;

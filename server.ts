@@ -122,15 +122,73 @@ async function savePdfToFirestore(id: string, buffer: Buffer, originalName?: str
   }
 }
 
-// Retrieve PDF Buffer from Firestore chunks
-async function getPdfFromFirestore(id: string): Promise<Buffer | null> {
+// Retrieve PDF Buffer from Firestore chunks with multi-candidate matching
+async function getPdfFromFirestore(id: string, fallbackIdentifiers?: (string | undefined | null)[]): Promise<Buffer | null> {
   if (!firestoreDb) return null;
   try {
-    const cleanId = id.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
-    const metaSnap = await getDoc(doc(firestoreDb, PDF_STORAGE_COLLECTION, cleanId));
-    if (!metaSnap.exists()) return null;
+    const candidates: string[] = [];
+    const addCandidate = (str?: string | null) => {
+      if (!str) return;
+      const clean = str.replace(/^[\uFEFF\s]+/, '').trim();
+      if (!clean) return;
+      if (!candidates.includes(clean)) candidates.push(clean);
+      if (!clean.endsWith('.pdf')) {
+        const withPdf = `${clean}.pdf`;
+        if (!candidates.includes(withPdf)) candidates.push(withPdf);
+      } else {
+        const withoutPdf = clean.replace(/\.pdf$/, '');
+        if (!candidates.includes(withoutPdf)) candidates.push(withoutPdf);
+      }
+    };
 
-    const chunksSnap = await getDocs(collection(firestoreDb, PDF_STORAGE_COLLECTION, cleanId, 'chunks'));
+    addCandidate(id);
+    if (fallbackIdentifiers && Array.isArray(fallbackIdentifiers)) {
+      fallbackIdentifiers.forEach(addCandidate);
+    }
+
+    // 1. Direct getDoc check on candidates
+    let targetDocId: string | null = null;
+    for (const cand of candidates) {
+      try {
+        const metaSnap = await getDoc(doc(firestoreDb, PDF_STORAGE_COLLECTION, cand));
+        if (metaSnap.exists()) {
+          targetDocId = cand;
+          break;
+        }
+      } catch {}
+    }
+
+    // 2. Scan pdf_storage if not found directly
+    if (!targetDocId) {
+      try {
+        const allPdfSnap = await getDocs(collection(firestoreDb, PDF_STORAGE_COLLECTION));
+        for (const d of allPdfSnap.docs) {
+          const docId = d.id;
+          const data = d.data();
+          const storedFileName = (data.fileName || '').replace(/^[\uFEFF\s]+/, '').trim();
+
+          for (const cand of candidates) {
+            if (
+              docId === cand ||
+              docId.includes(cand) ||
+              cand.includes(docId.replace(/\.pdf$/, '')) ||
+              storedFileName === cand ||
+              (storedFileName && cand && (storedFileName.includes(cand) || cand.includes(storedFileName)))
+            ) {
+              targetDocId = docId;
+              break;
+            }
+          }
+          if (targetDocId) break;
+        }
+      } catch (scanErr) {
+        console.warn('[Server] Could not scan pdf_storage:', scanErr);
+      }
+    }
+
+    if (!targetDocId) return null;
+
+    const chunksSnap = await getDocs(collection(firestoreDb, PDF_STORAGE_COLLECTION, targetDocId, 'chunks'));
     if (chunksSnap.empty) return null;
 
     const chunks: { index: number; data: string }[] = [];
@@ -709,9 +767,21 @@ app.get('/api/pdf/:id', async (req, res) => {
   const db = readDB();
 
   // Find corresponding worksheet if any
-  const item = db.worksheets.find(
+  let item = db.worksheets.find(
     w => w.id === cleanId || w.id === id || w.pdfDataUrl?.includes(cleanId) || w.pdfFileName === id || w.pdfFileName === `${cleanId}.pdf`
   );
+
+  if (!item && firestoreDb) {
+    try {
+      const wsDocSnap = await getDoc(doc(firestoreDb, 'worksheets', cleanId));
+      if (wsDocSnap.exists()) {
+        item = { id: wsDocSnap.id, ...wsDocSnap.data() } as Worksheet;
+        db.worksheets.push(item);
+        writeDB(db);
+      }
+    } catch {}
+  }
+
   const fileName = item?.pdfFileName?.replace(/^[\uFEFF\s]+/, '').trim() || `${cleanId}.pdf`;
 
   // 1. Direct file check on server disk
@@ -735,19 +805,25 @@ app.get('/api/pdf/:id', async (req, res) => {
 
   // 3. Permanent Cloud PDF Storage in Firestore
   try {
-    let cloudBuffer = await getPdfFromFirestore(cleanId);
-    if (!cloudBuffer && item?.id && item.id !== cleanId) {
-      cloudBuffer = await getPdfFromFirestore(item.id);
-    }
-    if (!cloudBuffer && item?.pdfFileName) {
-      const cleanFileName = item.pdfFileName.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
-      cloudBuffer = await getPdfFromFirestore(cleanFileName);
-    }
+    const fallbacks: string[] = [
+      item?.pdfFileName,
+      item?.title,
+      item?.id,
+      item?.pdfDataUrl?.replace('/api/pdf/', '').replace(/\.pdf$/, ''),
+    ].filter(Boolean) as string[];
+
+    const cloudBuffer = await getPdfFromFirestore(cleanId, fallbacks);
 
     if (cloudBuffer && cloudBuffer.length > 100) {
-      // Cache to server disk for subsequent instant streaming
+      // Cache to server disk under multiple identifiers for instant subsequent streaming
       try {
         fs.writeFileSync(path.join(UPLOADS_DIR, `${cleanId}.pdf`), cloudBuffer);
+        if (item?.id && item.id !== cleanId) {
+          fs.writeFileSync(path.join(UPLOADS_DIR, `${item.id}.pdf`), cloudBuffer);
+        }
+        if (item?.pdfFileName) {
+          fs.writeFileSync(path.join(UPLOADS_DIR, item.pdfFileName.replace(/^[\uFEFF\s]+/, '').trim()), cloudBuffer);
+        }
       } catch (cacheErr) {
         console.warn('[Server] Could not cache to disk:', cacheErr);
       }
@@ -777,9 +853,21 @@ app.get('/api/pdf/:id/download', async (req, res) => {
   const cleanId = id.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
   const db = readDB();
 
-  const item = db.worksheets.find(
+  let item = db.worksheets.find(
     w => w.id === cleanId || w.id === id || w.pdfDataUrl?.includes(cleanId) || w.pdfFileName === id || w.pdfFileName === `${cleanId}.pdf`
   );
+
+  if (!item && firestoreDb) {
+    try {
+      const wsDocSnap = await getDoc(doc(firestoreDb, 'worksheets', cleanId));
+      if (wsDocSnap.exists()) {
+        item = { id: wsDocSnap.id, ...wsDocSnap.data() } as Worksheet;
+        db.worksheets.push(item);
+        writeDB(db);
+      }
+    } catch {}
+  }
+
   const fileName = item?.pdfFileName?.replace(/^[\uFEFF\s]+/, '').trim() || `${cleanId}.pdf`;
 
   if (item) {
@@ -804,18 +892,21 @@ app.get('/api/pdf/:id/download', async (req, res) => {
 
   // Check Firestore
   try {
-    let cloudBuffer = await getPdfFromFirestore(cleanId);
-    if (!cloudBuffer && item?.id && item.id !== cleanId) {
-      cloudBuffer = await getPdfFromFirestore(item.id);
-    }
-    if (!cloudBuffer && item?.pdfFileName) {
-      const cleanFileName = item.pdfFileName.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
-      cloudBuffer = await getPdfFromFirestore(cleanFileName);
-    }
+    const fallbacks: string[] = [
+      item?.pdfFileName,
+      item?.title,
+      item?.id,
+      item?.pdfDataUrl?.replace('/api/pdf/', '').replace(/\.pdf$/, ''),
+    ].filter(Boolean) as string[];
+
+    const cloudBuffer = await getPdfFromFirestore(cleanId, fallbacks);
 
     if (cloudBuffer && cloudBuffer.length > 100) {
       try {
         fs.writeFileSync(path.join(UPLOADS_DIR, `${cleanId}.pdf`), cloudBuffer);
+        if (item?.id && item.id !== cleanId) {
+          fs.writeFileSync(path.join(UPLOADS_DIR, `${item.id}.pdf`), cloudBuffer);
+        }
       } catch {}
 
       res.setHeader('Content-Type', 'application/pdf');

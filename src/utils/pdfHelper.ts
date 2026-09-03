@@ -102,22 +102,17 @@ export async function downloadFile(dataUrl: string, fileName: string, worksheetI
   }
 
   // 4. Try Firestore Cloud PDF Storage
-  if (worksheetId) {
-    const cloudBlob = await getPdfFromCloudStorage(worksheetId);
-    if (cloudBlob && cloudBlob.size > 100) {
-      savePdfToLocalCache(worksheetId, cloudBlob);
-      triggerBlobDownload(cloudBlob, finalFileName);
-      return;
-    }
-  }
-  if (dataUrl && dataUrl.startsWith('/api/pdf/')) {
-    const cleanId = dataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
-    const cloudBlob = await getPdfFromCloudStorage(cleanId);
-    if (cloudBlob && cloudBlob.size > 100) {
-      savePdfToLocalCache(dataUrl, cloudBlob);
-      triggerBlobDownload(cloudBlob, finalFileName);
-      return;
-    }
+  const cleanId = dataUrl && dataUrl.startsWith('/api/pdf/') ? dataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim() : '';
+  const cloudBlob = await getPdfFromCloudStorage(cleanId || worksheetId || finalFileName, [
+    finalFileName,
+    fileName,
+    worksheetId,
+  ]);
+  if (cloudBlob && cloudBlob.size > 100) {
+    if (worksheetId) savePdfToLocalCache(worksheetId, cloudBlob);
+    if (dataUrl) savePdfToLocalCache(dataUrl, cloudBlob);
+    triggerBlobDownload(cloudBlob, finalFileName);
+    return;
   }
 
   // 5. Fallback anchor tag
@@ -133,7 +128,7 @@ export async function downloadFile(dataUrl: string, fileName: string, worksheetI
 /**
  * Open PDF in new tab for direct full-screen reading/printing
  */
-export async function openPdfInNewTab(dataUrl: string, worksheetId?: string) {
+export async function openPdfInNewTab(dataUrl: string, worksheetId?: string, fileName?: string) {
   if (!dataUrl) return;
 
   // 1. Check local cache
@@ -184,22 +179,15 @@ export async function openPdfInNewTab(dataUrl: string, worksheetId?: string) {
   }
 
   // 4. Check Firestore Cloud Storage
-  if (worksheetId) {
-    const cloudBlob = await getPdfFromCloudStorage(worksheetId);
-    if (cloudBlob && cloudBlob.size > 100) {
-      const blobUrl = URL.createObjectURL(cloudBlob);
-      window.open(blobUrl, '_blank');
-      return;
-    }
-  }
-  if (dataUrl && dataUrl.startsWith('/api/pdf/')) {
-    const cleanId = dataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
-    const cloudBlob = await getPdfFromCloudStorage(cleanId);
-    if (cloudBlob && cloudBlob.size > 100) {
-      const blobUrl = URL.createObjectURL(cloudBlob);
-      window.open(blobUrl, '_blank');
-      return;
-    }
+  const cleanId = dataUrl && dataUrl.startsWith('/api/pdf/') ? dataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim() : '';
+  const cloudBlob = await getPdfFromCloudStorage(cleanId || worksheetId || fileName || '', [
+    fileName,
+    worksheetId,
+  ]);
+  if (cloudBlob && cloudBlob.size > 100) {
+    const blobUrl = URL.createObjectURL(cloudBlob);
+    window.open(blobUrl, '_blank');
+    return;
   }
 
   window.open(dataUrl, '_blank');

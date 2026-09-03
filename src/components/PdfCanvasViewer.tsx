@@ -29,6 +29,7 @@ try {
 interface PdfCanvasViewerProps {
   pdfUrl: string;
   worksheetId?: string;
+  fileName?: string;
   title?: string;
   onOpenNewTab?: () => void;
   onDownload?: () => void;
@@ -37,6 +38,7 @@ interface PdfCanvasViewerProps {
 export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
   pdfUrl,
   worksheetId,
+  fileName,
   title = '학습지 PDF',
   onOpenNewTab,
   onDownload,
@@ -151,14 +153,9 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
 
           // C. If network fetch failed or returned invalid PDF, check Firestore Cloud Storage!
           if (!loadedDoc) {
-            let cloudBlob: Blob | null = null;
-            if (worksheetId) {
-              cloudBlob = await getPdfFromCloudStorage(worksheetId);
-            }
-            if (!cloudBlob && pdfUrl.startsWith('/api/pdf/')) {
-              const cleanId = pdfUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
-              cloudBlob = await getPdfFromCloudStorage(cleanId);
-            }
+            const cleanUrlId = pdfUrl.startsWith('/api/pdf/') ? pdfUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim() : '';
+            const fallbacks = [fileName, worksheetId, title, `${title}.pdf`].filter(Boolean) as string[];
+            const cloudBlob = await getPdfFromCloudStorage(cleanUrlId || worksheetId || fileName || '', fallbacks);
 
             if (cloudBlob && cloudBlob.size > 100) {
               const candidateDoc = await tryLoadPdf(cloudBlob);
@@ -168,6 +165,7 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
                   const buf = await cloudBlob.arrayBuffer();
                   const array = new Uint8Array(buf);
                   if (worksheetId) savePdfToLocalCache(worksheetId, array);
+                  if (fileName) savePdfToLocalCache(fileName, array);
                   savePdfToLocalCache(pdfUrl, array);
                 } catch {}
               }
@@ -176,14 +174,15 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
 
           // D. If not in Firestore Cloud, check IndexedDB local cache
           if (!loadedDoc) {
-            let cachedBlob: Blob | null = null;
-            if (worksheetId) cachedBlob = await getPdfFromLocalCache(worksheetId);
-            if (!cachedBlob && pdfUrl.startsWith('/api/pdf/')) cachedBlob = await getPdfFromLocalCache(pdfUrl);
-
-            if (cachedBlob && cachedBlob.size > 100) {
-              const candidateDoc = await tryLoadPdf(cachedBlob);
-              if (candidateDoc) {
-                loadedDoc = candidateDoc;
+            const candidateKeys = [worksheetId, pdfUrl, fileName, title].filter(Boolean) as string[];
+            for (const key of candidateKeys) {
+              const cachedBlob = await getPdfFromLocalCache(key);
+              if (cachedBlob && cachedBlob.size > 100) {
+                const candidateDoc = await tryLoadPdf(cachedBlob);
+                if (candidateDoc) {
+                  loadedDoc = candidateDoc;
+                  break;
+                }
               }
             }
           }
@@ -191,15 +190,8 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
           loadedDoc = await tryLoadPdf(pdfUrl);
         }
 
-        // E. Ultimate Fallback: If no valid PDF could be loaded (missing or invalid structure), generate standard valid worksheet PDF
         if (!loadedDoc) {
-          console.warn('[PdfCanvasViewer] Loading failed or invalid PDF structure, generating valid fallback template');
-          const validBase64 = await generateStandardWorksheetPdfBase64();
-          loadedDoc = await tryLoadPdf(validBase64);
-        }
-
-        if (!loadedDoc) {
-          throw new Error('선생님이 업로드한 PDF 파일을 찾을 수 없거나 올바르지 않은 형식입니다.');
+          throw new Error(`선생님이 등록한 PDF 파일(${fileName || title || '학습지'})을 불러올 수 없습니다. 파일이 서버에 정상적으로 등록되어 있는지 확인해주세요.`);
         }
 
         if (isCancelled) return;
