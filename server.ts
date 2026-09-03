@@ -3,6 +3,17 @@ import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  collection,
+  getDocs,
+  deleteDoc,
+  writeBatch,
+} from 'firebase/firestore';
 
 const app = express();
 const PORT = 3000;
@@ -21,6 +32,119 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+// Initialize Firestore for permanent cloud storage
+const firebaseConfigFile = path.join(process.cwd(), 'firebase-applet-config.json');
+let firestoreDb: any = null;
+
+if (fs.existsSync(firebaseConfigFile)) {
+  try {
+    const fbConfig = JSON.parse(fs.readFileSync(firebaseConfigFile, 'utf-8'));
+    const fbApp = !getApps().length ? initializeApp(fbConfig) : getApp();
+    firestoreDb = getFirestore(fbApp, fbConfig.firestoreDatabaseId || '(default)');
+    console.log('[Server] Connected to Firestore database for PDF storage:', fbConfig.firestoreDatabaseId || '(default)');
+    
+    // Sync worksheets from Firestore on startup
+    setTimeout(() => {
+      syncWorksheetsFromFirestore().catch(() => {});
+    }, 1000);
+  } catch (err) {
+    console.warn('[Server] Firestore init error:', err);
+  }
+}
+
+async function syncWorksheetsFromFirestore(): Promise<void> {
+  if (!firestoreDb) return;
+  try {
+    const snap = await getDocs(collection(firestoreDb, 'worksheets'));
+    if (!snap.empty) {
+      const db = readDB();
+      const firestoreItems: Worksheet[] = [];
+      snap.forEach(docSnap => {
+        firestoreItems.push({ id: docSnap.id, ...docSnap.data() } as Worksheet);
+      });
+
+      for (const item of firestoreItems) {
+        const existingIdx = db.worksheets.findIndex(w => w.id === item.id);
+        if (existingIdx >= 0) {
+          db.worksheets[existingIdx] = { ...db.worksheets[existingIdx], ...item };
+        } else {
+          db.worksheets.push(item);
+        }
+      }
+      writeDB(db);
+      console.log(`[Server] Synced ${firestoreItems.length} worksheets from Firestore into local cache.`);
+    }
+  } catch (err) {
+    console.warn('[Server] syncWorksheetsFromFirestore error:', err);
+  }
+}
+
+const PDF_STORAGE_COLLECTION = 'pdf_storage';
+const PDF_CHUNK_SIZE = 350 * 1024; // 350KB raw binary chunk
+
+// Save PDF binary to Firestore chunks
+async function savePdfToFirestore(id: string, buffer: Buffer, originalName?: string): Promise<boolean> {
+  if (!firestoreDb) return false;
+  try {
+    const cleanId = id.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
+    const totalChunks = Math.ceil(buffer.length / PDF_CHUNK_SIZE);
+    const now = new Date().toISOString();
+
+    // 1. Meta document
+    await setDoc(doc(firestoreDb, PDF_STORAGE_COLLECTION, cleanId), {
+      id: cleanId,
+      fileName: originalName || `${cleanId}.pdf`,
+      totalChunks,
+      fileSizeBytes: buffer.length,
+      updatedAt: now,
+    });
+
+    // 2. Chunks in subcollection
+    const promises: Promise<any>[] = [];
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * PDF_CHUNK_SIZE;
+      const end = Math.min(start + PDF_CHUNK_SIZE, buffer.length);
+      const chunkBase64 = buffer.subarray(start, end).toString('base64');
+      promises.push(
+        setDoc(doc(firestoreDb, PDF_STORAGE_COLLECTION, cleanId, 'chunks', String(i)), {
+          index: i,
+          data: chunkBase64,
+        })
+      );
+    }
+    await Promise.all(promises);
+    return true;
+  } catch (err) {
+    console.warn('[Server] savePdfToFirestore error:', err);
+    return false;
+  }
+}
+
+// Retrieve PDF Buffer from Firestore chunks
+async function getPdfFromFirestore(id: string): Promise<Buffer | null> {
+  if (!firestoreDb) return null;
+  try {
+    const cleanId = id.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
+    const metaSnap = await getDoc(doc(firestoreDb, PDF_STORAGE_COLLECTION, cleanId));
+    if (!metaSnap.exists()) return null;
+
+    const chunksSnap = await getDocs(collection(firestoreDb, PDF_STORAGE_COLLECTION, cleanId, 'chunks'));
+    if (chunksSnap.empty) return null;
+
+    const chunks: { index: number; data: string }[] = [];
+    chunksSnap.forEach((snap) => {
+      chunks.push(snap.data() as { index: number; data: string });
+    });
+    chunks.sort((a, b) => a.index - b.index);
+
+    const buffers = chunks.map((c) => Buffer.from(c.data, 'base64'));
+    return Buffer.concat(buffers);
+  } catch (err) {
+    console.warn('[Server] getPdfFromFirestore error:', err);
+    return null;
+  }
 }
 
 // Multer Disk Storage for PDFs
@@ -134,8 +258,8 @@ function sortWorksheets(list: Worksheet[]): Worksheet[] {
   });
 }
 
-// Sample initial starter worksheets for realistic preview
-const samplePdfTemplate1 = `data:application/pdf;base64,JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSL0ZpbHRlci9GbGF0ZURlY29kZT4+CnN0cmVhbQp4nCs21DG05GJwzs9L53IFAAaOAsgKZW5kc3RyZWFtCmVuZG9iagozIDAgb2JqCjE3CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUvUGFnZXMvQ291bnQgMS9LaWRzWyA0IDAgUl0+PgplbmRvYmoKNCAwIG9iago8PC9UeXBlL1BhZ2UvUGFyZW50IDEgMCBSL01lZGlhQm94WzAgMCA1OTUgODQyXS9DZXJ0cyA1IDAgUi9SZXNvdXJjZXM8PC9Qcm9jU2V0Wy9QREYvVGV4dF0+Pi9Db250ZW50cyAyIDAgUj4+CmVuZG9iago1IDAgb2JqCjw8L1Byb2NTZXRbL1BERi9UZXh0XS9Gb250PDwvRjEgNiAwIFI+Pj4+CmVuZG9iago2IDAgb2JqCjw8L1R5cGUvRm9udC9TdWJ0eXBlL1R5cGUxL0Jhc2VGb250L0hlbHZldGljYT4+CmVuZG9iagp4cmVmCjAgNwowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwNzMgMDAwMDAgbiAKMDAwMDAwMDAxOSAwMDAwMCBuIAowMDAwMDAwMTUxIDAwMDAwIG4gCjAwMDAwMDAyMDEgMDAwMDAgbiAKMDAwMDAwMDMwMyAwMDAwMCBuIAowMDAwMDAwMzU1IDAwMDAwIG4gCnRyYWlsZXIKPDwvU2l6ZSA3L1Jvb3QgMSAwIFI+PgpzdGFydHhyZWYKNDE4CiUlRU9GCg==`;
+// Sample initial starter worksheets for realistic preview (100% valid PDF binary)
+const samplePdfTemplate1 = `data:application/pdf;base64,JVBERi0xLjcKJYGBgYEKCjcgMCBvYmoKPDwKL0ZpbHRlciAvRmxhdGVEZWNvZGUKL0xlbmd0aCAyNzQKPj4Kc3RyZWFtCnicbZBNSwQxDIbv/RU5Czs2TZu0IMLOOIMHL0Jv4kH2ww92kRXRv+/bFQeWlZA0TZO+T3twvguRfCeMYEwfz87Tt3t4JE9rhyKMSZQsaZcLrfZzscXzbVtaTIl2LgXpQj7JPdIXt3X37uD6CvkC4SJ0lL683ey+Np+vq6eF+ZJj9gZNZqpbB8x6N6vFTDhqRHXvruJSk046wlhvgo+mxYIOJsizFjXNwSdR0Yy+SYfgDR5FB2WT1pdMJ8z01nqSJovXVN9cvXBj/aNl4jPQ/n23XhSLARJJM7H8T6szbUrgbBNeWJagKDpahPakEd8sFkGM14Ax6oRztnCsKVzg3Ph/p0A6wNoL262i6YT6B38xZlMKZW5kc3RyZWFtCmVuZG9iagoKOCAwIG9iago8PAovRmlsdGVyIC9GbGF0ZURlY29kZQovVHlwZSAvT2JqU3RtCi9OIDYKL0ZpcnN0IDMyCi9MZW5ndGggMzk2Cj4+CnN0cmVhbQp4nNVTW0vsMBB+z6+YR33QTNM0aWVZ2EurcJAjKiiKD7UNS2VJpM2K5987065HfDgo503KkMzMN7d0vgQQFGgNKdgcNGSpggxMUoABiwnMZkJe/3l2IC/qjRuE/NW1A9yTF+ESHoRchZ2PkIj5XHxgV3Wst2EjpiBIGPyOuOhDu2tcD7OqrCpEi4hGkxhEtaZzRVKQKNLJp3K6k1i9F7LZFDFdkK+axNgphv0jNtvHl3QS1jBmPWF1Pul/63KtcsqhvuqnmAt5Htp1HR0crE8UKoMFppjqDNO7Q3qO3tUx/Nzhxv674P854af/XAUfhbzaPcZRZWMi5LIeHHtAnrnti4tdUx8tw7YVsvRNaDu/AXnT+YUfunfDf6b9dkbeQ97G3vGyjusoL90Qdn1D+8m4MTNfPnq2WOT0oDYviBJjyOd5jgqrlclVZpg5+xWXt78fn1wz5mK1fI2nV5FfczKw7dy1Xb0Mr8QjpC8rsmOVQ66TYypFnFp4HyKzbOSXj9Q0a3bPOUrxBqjG7ZIKZW5kc3RyZWFtCmVuZG9iagoKOSAwIG9iago8PAovU2l6ZSAxMAovUm9vdCAyIDAgUgovSW5mbyAzIDAgUgovRmlsdGVyIC9GbGF0ZURlY29kZQovVHlwZSAvWFJlZgovTGVuZ3RoIDQzCi9XIFsgMSAyIDIgXQovSW5kZXggWyAwIDEwIF0KPj4Kc3RyZWFtCnicFcSxEQAgCATBe8AZQxu0AvqP0d9ggZlgg5MLl67cEgek/uWFB2rZAykKZW5kc3RyZWFtCmVuZG9iagoKc3RhcnR4cmVmCjg2MQolJUVPRg==`;
 
 const INITIAL_DB: DBState = {
   settings: {
@@ -452,7 +576,7 @@ app.post('/api/worksheets/:id/download', (req, res) => {
 });
 
 // 7.1. Direct PDF Upload via Multer
-app.post('/api/upload-pdf', upload.single('file'), (req, res) => {
+app.post('/api/upload-pdf', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'PDF 파일이 전달되지 않았습니다.' });
@@ -460,6 +584,12 @@ app.post('/api/upload-pdf', upload.single('file'), (req, res) => {
 
     const fileId = path.parse(req.file.filename).name;
     const fileUrl = `/api/pdf/${fileId}`;
+    const fileBuffer = fs.readFileSync(req.file.path);
+
+    // Save to Firestore cloud storage asynchronously for permanent retention across restarts
+    savePdfToFirestore(fileId, fileBuffer, req.file.originalname).catch((err) => {
+      console.warn('[Server] Background save to Firestore failed:', err);
+    });
 
     res.json({
       success: true,
@@ -474,9 +604,70 @@ app.post('/api/upload-pdf', upload.single('file'), (req, res) => {
   }
 });
 
+// 7.1b. Direct PDF Upload tied to Worksheet ID
+app.post('/api/upload-pdf-worksheet', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'PDF 파일이 전달되지 않았습니다.' });
+    }
+    const wsId = (req.body.worksheetId || '').replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
+    if (!wsId) {
+      return res.status(400).json({ success: false, message: '학습지 ID가 누락되었습니다.' });
+    }
+
+    // Save to local disk under worksheet ID
+    const destPath = path.join(UPLOADS_DIR, `${wsId}.pdf`);
+    fs.copyFileSync(req.file.path, destPath);
+
+    // Save to Firestore Cloud PDF Storage permanently
+    const fileBuffer = fs.readFileSync(req.file.path);
+    await savePdfToFirestore(wsId, fileBuffer, req.file.originalname);
+
+    // Update local db.json
+    const db = readDB();
+    const ws = db.worksheets.find(w => w.id === wsId);
+    if (ws) {
+      ws.pdfDataUrl = `/api/pdf/${wsId}`;
+      ws.pdfFileName = req.file.originalname;
+      ws.fileSizeBytes = req.file.size;
+      ws.updatedAt = new Date().toISOString();
+      writeDB(db);
+    }
+
+    // If Firestore is connected, update the worksheet document too
+    if (firestoreDb) {
+      try {
+        await setDoc(
+          doc(firestoreDb, 'worksheets', wsId),
+          {
+            pdfDataUrl: `/api/pdf/${wsId}`,
+            pdfFileName: req.file.originalname,
+            fileSizeBytes: req.file.size,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (fErr) {
+        console.warn('[Server] Could not update worksheet in Firestore:', fErr);
+      }
+    }
+
+    res.json({
+      success: true,
+      fileUrl: `/api/pdf/${wsId}`,
+      fileId: wsId,
+      fileName: req.file.originalname,
+      fileSizeBytes: req.file.size,
+    });
+  } catch (err: any) {
+    console.error('upload-pdf-worksheet error:', err);
+    res.status(500).json({ success: false, message: '학습지 PDF 파일 등록 중 오류가 발생했습니다.' });
+  }
+});
+
 // Helper to find existing PDF file for a given worksheet or ID
 function findPdfPathForWorksheet(idOrCleanId: string, item?: Worksheet): string | null {
-  const cleanId = idOrCleanId.replace(/\.pdf$/, '');
+  const cleanId = idOrCleanId.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
   const candidatePaths: string[] = [
     path.join(UPLOADS_DIR, `${cleanId}.pdf`),
     path.join(UPLOADS_DIR, cleanId),
@@ -484,16 +675,19 @@ function findPdfPathForWorksheet(idOrCleanId: string, item?: Worksheet): string 
 
   if (item) {
     if (item.id) {
-      candidatePaths.push(path.join(UPLOADS_DIR, `${item.id}.pdf`));
-      candidatePaths.push(path.join(UPLOADS_DIR, item.id));
+      const cId = item.id.replace(/^[\uFEFF\s]+/, '').trim();
+      candidatePaths.push(path.join(UPLOADS_DIR, `${cId}.pdf`));
+      candidatePaths.push(path.join(UPLOADS_DIR, cId));
     }
     if (item.pdfDataUrl && item.pdfDataUrl.startsWith('/api/pdf/')) {
-      const targetId = item.pdfDataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '');
+      const targetId = item.pdfDataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
       candidatePaths.push(path.join(UPLOADS_DIR, `${targetId}.pdf`));
       candidatePaths.push(path.join(UPLOADS_DIR, targetId));
     }
     if (item.pdfFileName) {
+      const cName = item.pdfFileName.replace(/^[\uFEFF\s]+/, '').trim();
       candidatePaths.push(path.join(UPLOADS_DIR, item.pdfFileName));
+      candidatePaths.push(path.join(UPLOADS_DIR, cName));
     }
   }
 
@@ -511,14 +705,14 @@ function findPdfPathForWorksheet(idOrCleanId: string, item?: Worksheet): string 
 // 7.2. Stream PDF Content by ID or Filename
 app.get('/api/pdf/:id', async (req, res) => {
   const { id } = req.params;
-  const cleanId = id.replace(/\.pdf$/, '');
+  const cleanId = id.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
   const db = readDB();
 
   // Find corresponding worksheet if any
   const item = db.worksheets.find(
     w => w.id === cleanId || w.id === id || w.pdfDataUrl?.includes(cleanId) || w.pdfFileName === id || w.pdfFileName === `${cleanId}.pdf`
   );
-  const fileName = item?.pdfFileName || `${cleanId}.pdf`;
+  const fileName = item?.pdfFileName?.replace(/^[\uFEFF\s]+/, '').trim() || `${cleanId}.pdf`;
 
   // 1. Direct file check on server disk
   const matchedPath = findPdfPathForWorksheet(cleanId, item);
@@ -539,36 +733,54 @@ app.get('/api/pdf/:id', async (req, res) => {
     return res.send(buffer);
   }
 
-  // 3. Generate standard worksheet PDF if this is a sample
+  // 3. Permanent Cloud PDF Storage in Firestore
   try {
-    const sampleBase64 = await generateStandardWorksheetPdfBase64();
-    const raw = sampleBase64.replace(/^data:application\/pdf;base64,/, '');
-    const buffer = Buffer.from(raw, 'base64');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
-    return res.send(buffer);
-  } catch (genErr) {
-    console.warn('PDF generator failed, sending basic fallback template:', genErr);
-    const fallback = samplePdfTemplate1.replace(/^data:application\/pdf;base64,/, '');
-    const buffer = Buffer.from(fallback, 'base64');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
-    return res.send(buffer);
+    let cloudBuffer = await getPdfFromFirestore(cleanId);
+    if (!cloudBuffer && item?.id && item.id !== cleanId) {
+      cloudBuffer = await getPdfFromFirestore(item.id);
+    }
+    if (!cloudBuffer && item?.pdfFileName) {
+      const cleanFileName = item.pdfFileName.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
+      cloudBuffer = await getPdfFromFirestore(cleanFileName);
+    }
+
+    if (cloudBuffer && cloudBuffer.length > 100) {
+      // Cache to server disk for subsequent instant streaming
+      try {
+        fs.writeFileSync(path.join(UPLOADS_DIR, `${cleanId}.pdf`), cloudBuffer);
+      } catch (cacheErr) {
+        console.warn('[Server] Could not cache to disk:', cacheErr);
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      return res.send(cloudBuffer);
+    }
+  } catch (cloudErr) {
+    console.warn('[Server] Error fetching PDF from Firestore:', cloudErr);
   }
+
+  // 4. If not found, return 404 (NEVER return arbitrary fake template!)
+  return res.status(404).json({
+    success: false,
+    error: 'PDF_NOT_FOUND',
+    id: cleanId,
+    fileName,
+    message: 'PDF 파일이 서버에 등록되지 않았습니다.',
+  });
 });
 
 // 7.3. Direct Download Route with Attachment Header
 app.get('/api/pdf/:id/download', async (req, res) => {
   const { id } = req.params;
-  const cleanId = id.replace(/\.pdf$/, '');
+  const cleanId = id.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
   const db = readDB();
 
   const item = db.worksheets.find(
     w => w.id === cleanId || w.id === id || w.pdfDataUrl?.includes(cleanId) || w.pdfFileName === id || w.pdfFileName === `${cleanId}.pdf`
   );
-  const fileName = item?.pdfFileName || `${cleanId}.pdf`;
+  const fileName = item?.pdfFileName?.replace(/^[\uFEFF\s]+/, '').trim() || `${cleanId}.pdf`;
 
   if (item) {
     item.downloadCount = (item.downloadCount || 0) + 1;
@@ -590,20 +802,37 @@ app.get('/api/pdf/:id/download', async (req, res) => {
     return res.send(buffer);
   }
 
+  // Check Firestore
   try {
-    const sampleBase64 = await generateStandardWorksheetPdfBase64();
-    const raw = sampleBase64.replace(/^data:application\/pdf;base64,/, '');
-    const buffer = Buffer.from(raw, 'base64');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
-    return res.send(buffer);
-  } catch {
-    const fallback = samplePdfTemplate1.replace(/^data:application\/pdf;base64,/, '');
-    const buffer = Buffer.from(fallback, 'base64');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
-    return res.send(buffer);
+    let cloudBuffer = await getPdfFromFirestore(cleanId);
+    if (!cloudBuffer && item?.id && item.id !== cleanId) {
+      cloudBuffer = await getPdfFromFirestore(item.id);
+    }
+    if (!cloudBuffer && item?.pdfFileName) {
+      const cleanFileName = item.pdfFileName.replace(/^[\uFEFF\s]+/, '').replace(/\.pdf$/, '').trim();
+      cloudBuffer = await getPdfFromFirestore(cleanFileName);
+    }
+
+    if (cloudBuffer && cloudBuffer.length > 100) {
+      try {
+        fs.writeFileSync(path.join(UPLOADS_DIR, `${cleanId}.pdf`), cloudBuffer);
+      } catch {}
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      return res.send(cloudBuffer);
+    }
+  } catch (cloudErr) {
+    console.warn('[Server] Error fetching PDF from Firestore for download:', cloudErr);
   }
+
+  return res.status(404).json({
+    success: false,
+    error: 'PDF_NOT_FOUND',
+    id: cleanId,
+    fileName,
+    message: '다운로드할 PDF 파일이 서버에 존재하지 않습니다.',
+  });
 });
 
 // 8. Create new Worksheet (Teacher)
@@ -706,12 +935,32 @@ app.put('/api/worksheets/:id', (req, res) => {
     return res.status(401).json({ success: false, message: '권한이 없습니다.' });
   }
 
-  const index = db.worksheets.findIndex(w => w.id === id);
+  let index = db.worksheets.findIndex(w => w.id === id);
   if (index === -1) {
-    return res.status(404).json({ success: false, message: '학습지를 찾을 수 없습니다.' });
+    // If worksheet exists in Firestore or was added earlier, upsert it into local db
+    const newWs: Worksheet = {
+      id,
+      unitId: updates.unitId || 'unit-1',
+      unitTitle: updates.unitTitle || '1단원. 인공지능의 이해',
+      lessonNumber: updates.lessonNumber || '',
+      title: updates.title || '학습지',
+      subject: updates.subject || '인공지능 기초',
+      grade: updates.grade || '고등학교',
+      date: updates.date || new Date().toISOString().split('T')[0],
+      pdfFileName: updates.pdfFileName || `${id}.pdf`,
+      pdfDataUrl: updates.pdfDataUrl || `/api/pdf/${id}`,
+      fileSizeBytes: updates.fileSizeBytes || 0,
+      downloadCount: 0,
+      viewCount: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...updates,
+    };
+    db.worksheets.push(newWs);
+    index = db.worksheets.length - 1;
   }
 
-  // If updates include a new PDF, sync to disk
+  // If updates include a new PDF, sync to disk and Firestore
   if (updates && updates.pdfDataUrl) {
     if (updates.pdfDataUrl.startsWith('/api/pdf/')) {
       const uploadedFileId = updates.pdfDataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '');
@@ -720,6 +969,8 @@ app.put('/api/worksheets/:id', (req, res) => {
       if (fs.existsSync(sourcePath)) {
         try {
           fs.copyFileSync(sourcePath, destPath);
+          const buf = fs.readFileSync(destPath);
+          savePdfToFirestore(id, buf, updates.pdfFileName);
         } catch (cErr) {
           console.warn('Could not copy updated pdf to id path:', cErr);
         }
@@ -730,6 +981,7 @@ app.put('/api/worksheets/:id', (req, res) => {
         const buffer = Buffer.from(base64Data, 'base64');
         const filePath = path.join(UPLOADS_DIR, `${id}.pdf`);
         fs.writeFileSync(filePath, buffer);
+        savePdfToFirestore(id, buffer, updates.pdfFileName);
         updates.pdfDataUrl = `/api/pdf/${id}`;
       } catch (saveErr) {
         console.warn('Could not write uploaded pdf buffer to disk on update:', saveErr);

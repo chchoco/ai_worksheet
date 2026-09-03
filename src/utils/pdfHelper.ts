@@ -1,4 +1,5 @@
 import { getPdfFromLocalCache, savePdfToLocalCache } from './pdfStorage';
+import { getPdfFromCloudStorage } from '../firebase';
 
 /**
  * Utility functions for PDF handling, printing, and file formatting
@@ -82,22 +83,44 @@ export async function downloadFile(dataUrl: string, fileName: string, worksheetI
     try {
       const res = await fetch(dataUrl);
       if (res.ok) {
-        const rawBlob = await res.blob();
-        const pdfBlob = new Blob([rawBlob], { type: 'application/pdf' });
-        
-        // Cache to IndexedDB for next time
-        if (worksheetId) savePdfToLocalCache(worksheetId, pdfBlob);
-        savePdfToLocalCache(dataUrl, pdfBlob);
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const rawBlob = await res.blob();
+          const pdfBlob = new Blob([rawBlob], { type: 'application/pdf' });
+          
+          // Cache to IndexedDB for next time
+          if (worksheetId) savePdfToLocalCache(worksheetId, pdfBlob);
+          savePdfToLocalCache(dataUrl, pdfBlob);
 
-        triggerBlobDownload(pdfBlob, finalFileName);
-        return;
+          triggerBlobDownload(pdfBlob, finalFileName);
+          return;
+        }
       }
     } catch (err) {
       console.warn('Direct fetch for download failed, trying fallback:', err);
     }
   }
 
-  // 4. Fallback anchor tag
+  // 4. Try Firestore Cloud PDF Storage
+  if (worksheetId) {
+    const cloudBlob = await getPdfFromCloudStorage(worksheetId);
+    if (cloudBlob && cloudBlob.size > 100) {
+      savePdfToLocalCache(worksheetId, cloudBlob);
+      triggerBlobDownload(cloudBlob, finalFileName);
+      return;
+    }
+  }
+  if (dataUrl && dataUrl.startsWith('/api/pdf/')) {
+    const cleanId = dataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
+    const cloudBlob = await getPdfFromCloudStorage(cleanId);
+    if (cloudBlob && cloudBlob.size > 100) {
+      savePdfToLocalCache(dataUrl, cloudBlob);
+      triggerBlobDownload(cloudBlob, finalFileName);
+      return;
+    }
+  }
+
+  // 5. Fallback anchor tag
   const link = document.createElement('a');
   link.href = dataUrl;
   link.setAttribute('download', finalFileName);
@@ -113,7 +136,7 @@ export async function downloadFile(dataUrl: string, fileName: string, worksheetI
 export async function openPdfInNewTab(dataUrl: string, worksheetId?: string) {
   if (!dataUrl) return;
 
-  // Check local cache
+  // 1. Check local cache
   if (worksheetId) {
     const cached = await getPdfFromLocalCache(worksheetId);
     if (cached) {
@@ -123,6 +146,7 @@ export async function openPdfInNewTab(dataUrl: string, worksheetId?: string) {
     }
   }
 
+  // 2. Base64
   if (dataUrl.startsWith('data:application/pdf') || dataUrl.startsWith('data:;base64,')) {
     try {
       const parts = dataUrl.split(',');
@@ -142,17 +166,40 @@ export async function openPdfInNewTab(dataUrl: string, worksheetId?: string) {
     }
   }
 
+  // 3. Direct fetch
   if (dataUrl.startsWith('/') || dataUrl.startsWith('http')) {
     try {
       const res = await fetch(dataUrl);
       if (res.ok) {
-        const blob = await res.blob();
-        const pdfBlob = new Blob([blob], { type: 'application/pdf' });
-        const blobUrl = URL.createObjectURL(pdfBlob);
-        window.open(blobUrl, '_blank');
-        return;
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const blob = await res.blob();
+          const pdfBlob = new Blob([blob], { type: 'application/pdf' });
+          const blobUrl = URL.createObjectURL(pdfBlob);
+          window.open(blobUrl, '_blank');
+          return;
+        }
       }
     } catch {}
+  }
+
+  // 4. Check Firestore Cloud Storage
+  if (worksheetId) {
+    const cloudBlob = await getPdfFromCloudStorage(worksheetId);
+    if (cloudBlob && cloudBlob.size > 100) {
+      const blobUrl = URL.createObjectURL(cloudBlob);
+      window.open(blobUrl, '_blank');
+      return;
+    }
+  }
+  if (dataUrl && dataUrl.startsWith('/api/pdf/')) {
+    const cleanId = dataUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
+    const cloudBlob = await getPdfFromCloudStorage(cleanId);
+    if (cloudBlob && cloudBlob.size > 100) {
+      const blobUrl = URL.createObjectURL(cloudBlob);
+      window.open(blobUrl, '_blank');
+      return;
+    }
   }
 
   window.open(dataUrl, '_blank');

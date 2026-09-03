@@ -24,6 +24,7 @@ export const db = getFirestore(app, dbId);
 export const WORKSHEETS_COLLECTION = 'worksheets';
 export const SETTINGS_COLLECTION = 'settings';
 export const SETTINGS_DOC_ID = 'global_settings';
+export const PDF_STORAGE_COLLECTION = 'pdf_storage';
 
 // Helper to remove any undefined or invalid properties before sending to Firestore
 function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
@@ -345,3 +346,171 @@ export async function firestoreUpdateSettings(newSettings: Partial<ClassSettings
   await setDoc(docRef, sanitizeForFirestore(dataToUpdate), { merge: true });
   return true;
 }
+
+// Convert ArrayBuffer / Uint8Array / Blob to base64 safely in browser and node
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * Save PDF binary permanently to Firestore in chunks (Cloud PDF Storage)
+ * Overcomes 1MB document limit and guarantees persistence across server restarts
+ */
+export async function savePdfToCloudStorage(
+  id: string,
+  data: Blob | ArrayBuffer | Uint8Array,
+  fileName?: string
+): Promise<boolean> {
+  try {
+    const cleanId = id.replace(/^[\uFEFF\s]+/, '').trim();
+    if (!cleanId) return false;
+
+    let uint8: Uint8Array;
+    if (data instanceof Uint8Array) {
+      uint8 = data;
+    } else if (data instanceof ArrayBuffer) {
+      uint8 = new Uint8Array(data);
+    } else if (data instanceof Blob) {
+      const buffer = await data.arrayBuffer();
+      uint8 = new Uint8Array(buffer);
+    } else {
+      return false;
+    }
+
+    if (uint8.length === 0) return false;
+
+    const CHUNK_SIZE = 350 * 1024; // 350KB raw binary per chunk (~467KB base64)
+    const totalChunks = Math.ceil(uint8.length / CHUNK_SIZE);
+    const now = new Date().toISOString();
+
+    // 1. Write metadata
+    const metaRef = doc(db, PDF_STORAGE_COLLECTION, cleanId);
+    await setDoc(metaRef, {
+      id: cleanId,
+      fileName: fileName || `${cleanId}.pdf`,
+      totalChunks,
+      fileSizeBytes: uint8.length,
+      updatedAt: now,
+    });
+
+    // 2. Write chunks in parallel
+    const chunkPromises: Promise<any>[] = [];
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, uint8.length);
+      const slice = uint8.subarray(start, end);
+      const base64Data = uint8ArrayToBase64(slice);
+
+      const chunkDocRef = doc(db, PDF_STORAGE_COLLECTION, cleanId, 'chunks', String(i));
+      chunkPromises.push(
+        setDoc(chunkDocRef, {
+          index: i,
+          data: base64Data,
+        })
+      );
+    }
+
+    await Promise.all(chunkPromises);
+    return true;
+  } catch (err) {
+    console.error('Error saving PDF to Firestore cloud storage:', err);
+    return false;
+  }
+}
+
+/**
+ * Retrieve PDF Blob from Firestore Cloud PDF Storage
+ */
+export async function getPdfFromCloudStorage(id: string): Promise<Blob | null> {
+  try {
+    const cleanId = id.replace(/^[\uFEFF\s]+/, '').trim();
+    if (!cleanId) return null;
+
+    const metaRef = doc(db, PDF_STORAGE_COLLECTION, cleanId);
+    const metaSnap = await getDoc(metaRef);
+    if (!metaSnap.exists()) {
+      return null;
+    }
+
+    const chunksColRef = collection(db, PDF_STORAGE_COLLECTION, cleanId, 'chunks');
+    const chunksSnap = await getDocs(chunksColRef);
+    if (chunksSnap.empty) {
+      return null;
+    }
+
+    const chunkList: { index: number; data: string }[] = [];
+    chunksSnap.forEach((snap) => {
+      chunkList.push(snap.data() as { index: number; data: string });
+    });
+
+    chunkList.sort((a, b) => a.index - b.index);
+
+    // Decode all chunks into slices
+    const byteArrays: Uint8Array[] = [];
+    let totalLength = 0;
+
+    for (const chunk of chunkList) {
+      if (chunk.data) {
+        const slice = base64ToUint8Array(chunk.data);
+        byteArrays.push(slice);
+        totalLength += slice.length;
+      }
+    }
+
+    if (totalLength === 0) return null;
+
+    // Concatenate into single buffer
+    const merged = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const slice of byteArrays) {
+      merged.set(slice, offset);
+      offset += slice.length;
+    }
+
+    return new Blob([merged.buffer], { type: 'application/pdf' });
+  } catch (err) {
+    console.error('Error fetching PDF from Firestore cloud storage:', err);
+    return null;
+  }
+}
+
+/**
+ * Delete PDF from Firestore Cloud PDF Storage
+ */
+export async function deletePdfFromCloudStorage(id: string): Promise<boolean> {
+  try {
+    const cleanId = id.replace(/^[\uFEFF\s]+/, '').trim();
+    if (!cleanId) return false;
+
+    const chunksColRef = collection(db, PDF_STORAGE_COLLECTION, cleanId, 'chunks');
+    const chunksSnap = await getDocs(chunksColRef);
+    const batch = writeBatch(db);
+
+    chunksSnap.forEach((snap) => {
+      batch.delete(snap.ref);
+    });
+    batch.delete(doc(db, PDF_STORAGE_COLLECTION, cleanId));
+
+    await batch.commit();
+    return true;
+  } catch (err) {
+    console.warn('Could not delete PDF from Firestore cloud storage:', err);
+    return false;
+  }
+}
+

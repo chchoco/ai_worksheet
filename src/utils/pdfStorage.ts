@@ -32,12 +32,30 @@ function openPdfDatabase(): Promise<IDBDatabase> {
   });
 }
 
+// Normalize storage key (strips UTF-8 BOM, trims whitespace, standardizes paths)
+export function normalizePdfKey(rawKey: string): string {
+  if (!rawKey) return '';
+  return rawKey.replace(/^[\uFEFF\s]+/, '').replace(/[\uFEFF]/g, '').trim();
+}
+
 /**
- * Save PDF binary (Blob, ArrayBuffer, or Base64 string) to IndexedDB
+ * Save PDF binary (Blob, ArrayBuffer, or Base64 string) to IndexedDB under one or multiple keys
  */
-export async function savePdfToLocalCache(key: string, data: Blob | ArrayBuffer | Uint8Array | string): Promise<boolean> {
+export async function savePdfToLocalCache(
+  keyOrKeys: string | string[],
+  data: Blob | ArrayBuffer | Uint8Array | string
+): Promise<boolean> {
   try {
-    if (!key) return false;
+    const rawKeys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
+    const validKeys = Array.from(
+      new Set(
+        rawKeys
+          .flatMap(k => [k, normalizePdfKey(k)])
+          .filter(k => Boolean(k && k.trim() !== ''))
+      )
+    );
+
+    if (validKeys.length === 0) return false;
     const db = await openPdfDatabase();
 
     let blobToStore: Blob;
@@ -59,7 +77,7 @@ export async function savePdfToLocalCache(key: string, data: Blob | ArrayBuffer 
         }
         blobToStore = new Blob([byteNumbers.buffer], { type: 'application/pdf' });
       } else {
-        // Normal URL string - do not store as binary
+        // Plain URL string - not binary
         return false;
       }
     } else {
@@ -69,10 +87,13 @@ export async function savePdfToLocalCache(key: string, data: Blob | ArrayBuffer 
     return new Promise((resolve) => {
       const transaction = db.transaction([STORE_NAME], 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
-      const putRequest = store.put(blobToStore, key);
 
-      putRequest.onsuccess = () => resolve(true);
-      putRequest.onerror = () => resolve(false);
+      for (const key of validKeys) {
+        store.put(blobToStore, key);
+      }
+
+      transaction.oncomplete = () => resolve(true);
+      transaction.onerror = () => resolve(false);
     });
   } catch (err) {
     console.warn('Could not save PDF to IndexedDB:', err);
@@ -81,28 +102,91 @@ export async function savePdfToLocalCache(key: string, data: Blob | ArrayBuffer 
 }
 
 /**
- * Retrieve PDF Blob from IndexedDB
+ * Retrieve PDF Blob from IndexedDB by trying one or more candidate keys
  */
-export async function getPdfFromLocalCache(key: string): Promise<Blob | null> {
+export async function getPdfFromLocalCache(keyOrKeys: string | string[]): Promise<Blob | null> {
   try {
-    if (!key) return null;
+    const rawKeys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
+    const candidateKeys = Array.from(
+      new Set(
+        rawKeys
+          .flatMap(k => [k, normalizePdfKey(k)])
+          .filter(k => Boolean(k && k.trim() !== ''))
+      )
+    );
+
+    if (candidateKeys.length === 0) return null;
     const db = await openPdfDatabase();
 
-    return new Promise((resolve) => {
-      const transaction = db.transaction([STORE_NAME], 'readonly');
-      const store = transaction.objectStore(STORE_NAME);
-      const getRequest = store.get(key);
-
-      getRequest.onsuccess = () => {
-        if (getRequest.result instanceof Blob) {
-          resolve(getRequest.result);
-        } else {
+    // 1. Direct key lookups in order of priority
+    for (const key of candidateKeys) {
+      const blob = await new Promise<Blob | null>((resolve) => {
+        try {
+          const transaction = db.transaction([STORE_NAME], 'readonly');
+          const store = transaction.objectStore(STORE_NAME);
+          const request = store.get(key);
+          request.onsuccess = () => {
+            if (request.result instanceof Blob && request.result.size > 100) {
+              resolve(request.result);
+            } else {
+              resolve(null);
+            }
+          };
+          request.onerror = () => resolve(null);
+        } catch {
           resolve(null);
         }
-      };
+      });
 
-      getRequest.onerror = () => resolve(null);
+      if (blob) {
+        return blob;
+      }
+    }
+
+    // 2. Fuzzy search across all stored keys in IndexedDB
+    const allKeys = await new Promise<IDBValidKey[]>((resolve) => {
+      try {
+        const transaction = db.transaction([STORE_NAME], 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.getAllKeys();
+        request.onsuccess = () => resolve(request.result || []);
+        request.onerror = () => resolve([]);
+      } catch {
+        resolve([]);
+      }
     });
+
+    for (const searchKey of candidateKeys) {
+      const cleanSearch = normalizePdfKey(searchKey).toLowerCase().replace(/\.pdf$/, '');
+      if (cleanSearch.length < 2) continue;
+
+      for (const k of allKeys) {
+        if (typeof k === 'string') {
+          const cleanK = normalizePdfKey(k).toLowerCase();
+          if (cleanK.includes(cleanSearch) || cleanSearch.includes(cleanK)) {
+            const fuzzyBlob = await new Promise<Blob | null>((resFuzzy) => {
+              const tx = db.transaction([STORE_NAME], 'readonly');
+              const st = tx.objectStore(STORE_NAME);
+              const r = st.get(k);
+              r.onsuccess = () => {
+                if (r.result instanceof Blob && r.result.size > 100) {
+                  resFuzzy(r.result);
+                } else {
+                  resFuzzy(null);
+                }
+              };
+              r.onerror = () => resFuzzy(null);
+            });
+
+            if (fuzzyBlob) {
+              return fuzzyBlob;
+            }
+          }
+        }
+      }
+    }
+
+    return null;
   } catch (err) {
     console.warn('Could not retrieve PDF from IndexedDB:', err);
     return null;

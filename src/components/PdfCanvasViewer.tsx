@@ -15,8 +15,9 @@ import {
   FileText,
   RefreshCw,
 } from 'lucide-react';
-import { generateStandardWorksheetPdfBase64 } from '../../serverPdfGenerator';
+import { getPdfFromCloudStorage } from '../firebase';
 import { getPdfFromLocalCache, savePdfToLocalCache, deletePdfFromLocalCache } from '../utils/pdfStorage';
+import { generateStandardWorksheetPdfBase64 } from '../../serverPdfGenerator';
 
 // Configure PDF.js worker
 try {
@@ -60,7 +61,7 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
     setReloadKey(prev => prev + 1);
   };
 
-  // 1. Load PDF Document with robust data parsing and automatic fallback to valid generated PDF
+  // 1. Load PDF Document from Network -> Firestore Cloud Storage -> IndexedDB
   useEffect(() => {
     let isCancelled = false;
     setIsLoading(true);
@@ -70,104 +71,146 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
 
     const loadDoc = async () => {
       try {
-        let loadingTask: any;
+        let loadedDoc: any = null;
 
         if (!pdfUrl || pdfUrl.trim() === '') {
-          throw new Error('PDF URL is empty');
+          throw new Error('PDF URL이 비어 있습니다.');
         }
+
+        // Helper to attempt loading a document from Uint8Array, Blob, or URL
+        const tryLoadPdf = async (input: Uint8Array | Blob | string): Promise<any> => {
+          try {
+            let task: any;
+            if (input instanceof Blob) {
+              const buf = await input.arrayBuffer();
+              const arr = new Uint8Array(buf);
+              if (arr.length < 10) return null;
+              task = pdfjsLib.getDocument({ data: arr });
+            } else if (input instanceof Uint8Array) {
+              if (input.length < 10) return null;
+              task = pdfjsLib.getDocument({ data: input });
+            } else if (typeof input === 'string') {
+              if (input.startsWith('data:')) {
+                const parts = input.split(',');
+                const b64 = parts.length > 1 ? parts[1] : parts[0];
+                const raw = window.atob(b64);
+                const arr = new Uint8Array(raw.length);
+                for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+                task = pdfjsLib.getDocument({ data: arr });
+              } else {
+                task = pdfjsLib.getDocument({ url: input });
+              }
+            } else {
+              return null;
+            }
+            const doc = await task.promise;
+            return doc;
+          } catch (e) {
+            console.warn('[PdfCanvasViewer] Candidate parse attempt failed:', e);
+            return null;
+          }
+        };
 
         // A. Base64 URL format
         if (pdfUrl.startsWith('data:application/pdf') || pdfUrl.startsWith('data:;base64,') || pdfUrl.startsWith('data:application/octet-stream')) {
-          const parts = pdfUrl.split(',');
-          const base64Data = parts.length > 1 ? parts[1] : parts[0];
-          
-          try {
-            const raw = window.atob(base64Data);
-            const rawLength = raw.length;
-            const array = new Uint8Array(new ArrayBuffer(rawLength));
-            for (let i = 0; i < rawLength; i++) {
-              array[i] = raw.charCodeAt(i);
-            }
-            
-            // Save to IndexedDB
-            if (worksheetId) savePdfToLocalCache(worksheetId, array);
-            savePdfToLocalCache(pdfUrl, array);
-
-            loadingTask = pdfjsLib.getDocument({ data: array });
-          } catch (b64Err) {
-            console.warn('Base64 data corrupted or invalid header, generating standard template:', b64Err);
-            const validPdfBase64 = await generateStandardWorksheetPdfBase64();
-            const validRaw = window.atob(validPdfBase64.split(',')[1]);
-            const validArray = new Uint8Array(validRaw.length);
-            for (let i = 0; i < validRaw.length; i++) {
-              validArray[i] = validRaw.charCodeAt(i);
-            }
-            loadingTask = pdfjsLib.getDocument({ data: validArray });
+          loadedDoc = await tryLoadPdf(pdfUrl);
+          if (loadedDoc) {
+            try {
+              const parts = pdfUrl.split(',');
+              const base64Data = parts.length > 1 ? parts[1] : parts[0];
+              const raw = window.atob(base64Data);
+              const array = new Uint8Array(raw.length);
+              for (let i = 0; i < raw.length; i++) array[i] = raw.charCodeAt(i);
+              if (worksheetId) savePdfToLocalCache(worksheetId, array);
+              savePdfToLocalCache(pdfUrl, array);
+            } catch {}
           }
         } else if (pdfUrl.startsWith('/') || pdfUrl.startsWith('http')) {
-          // B. Direct Network Fetch with cache-busting to guarantee latest upload
+          // B. Direct Network Fetch with cache-busting
           try {
             const targetUrl = pdfUrl.includes('?') ? `${pdfUrl}&_t=${Date.now()}` : `${pdfUrl}?_t=${Date.now()}`;
             const res = await fetch(targetUrl, { cache: 'no-cache' });
-            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-            const buf = await res.arrayBuffer();
-            const array = new Uint8Array(buf);
-            
-            if (array.length > 4 && array[0] === 0x25 && array[1] === 0x50 && array[2] === 0x44 && array[3] === 0x46) {
-              if (worksheetId) savePdfToLocalCache(worksheetId, array);
-              savePdfToLocalCache(pdfUrl, array);
-              loadingTask = pdfjsLib.getDocument({ data: array });
-            } else {
-              throw new Error('Received file is not a valid PDF binary');
+            if (res.ok) {
+              const contentType = res.headers.get('content-type') || '';
+              if (!contentType.includes('application/json')) {
+                const buf = await res.arrayBuffer();
+                const array = new Uint8Array(buf);
+                if (array.length > 10 && array[0] === 0x25 && array[1] === 0x50 && array[2] === 0x44 && array[3] === 0x46) {
+                  const candidateDoc = await tryLoadPdf(array);
+                  if (candidateDoc) {
+                    loadedDoc = candidateDoc;
+                    if (worksheetId) savePdfToLocalCache(worksheetId, array);
+                    savePdfToLocalCache(pdfUrl, array);
+                  }
+                }
+              }
             }
           } catch (fetchErr) {
-            console.warn('Direct fetch failed, checking IndexedDB cache fallback:', fetchErr);
+            console.warn('[PdfCanvasViewer] Direct fetch failed, checking Firestore cloud & local storage:', fetchErr);
+          }
+
+          // C. If network fetch failed or returned invalid PDF, check Firestore Cloud Storage!
+          if (!loadedDoc) {
+            let cloudBlob: Blob | null = null;
+            if (worksheetId) {
+              cloudBlob = await getPdfFromCloudStorage(worksheetId);
+            }
+            if (!cloudBlob && pdfUrl.startsWith('/api/pdf/')) {
+              const cleanId = pdfUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
+              cloudBlob = await getPdfFromCloudStorage(cleanId);
+            }
+
+            if (cloudBlob && cloudBlob.size > 100) {
+              const candidateDoc = await tryLoadPdf(cloudBlob);
+              if (candidateDoc) {
+                loadedDoc = candidateDoc;
+                try {
+                  const buf = await cloudBlob.arrayBuffer();
+                  const array = new Uint8Array(buf);
+                  if (worksheetId) savePdfToLocalCache(worksheetId, array);
+                  savePdfToLocalCache(pdfUrl, array);
+                } catch {}
+              }
+            }
+          }
+
+          // D. If not in Firestore Cloud, check IndexedDB local cache
+          if (!loadedDoc) {
             let cachedBlob: Blob | null = null;
             if (worksheetId) cachedBlob = await getPdfFromLocalCache(worksheetId);
             if (!cachedBlob && pdfUrl.startsWith('/api/pdf/')) cachedBlob = await getPdfFromLocalCache(pdfUrl);
 
             if (cachedBlob && cachedBlob.size > 100) {
-              const buf = await cachedBlob.arrayBuffer();
-              const array = new Uint8Array(buf);
-              loadingTask = pdfjsLib.getDocument({ data: array });
-            } else {
-              loadingTask = pdfjsLib.getDocument(pdfUrl);
+              const candidateDoc = await tryLoadPdf(cachedBlob);
+              if (candidateDoc) {
+                loadedDoc = candidateDoc;
+              }
             }
           }
         } else {
-          loadingTask = pdfjsLib.getDocument(pdfUrl);
+          loadedDoc = await tryLoadPdf(pdfUrl);
         }
 
-        const doc = await loadingTask.promise;
-        if (isCancelled) return;
+        // E. Ultimate Fallback: If no valid PDF could be loaded (missing or invalid structure), generate standard valid worksheet PDF
+        if (!loadedDoc) {
+          console.warn('[PdfCanvasViewer] Loading failed or invalid PDF structure, generating valid fallback template');
+          const validBase64 = await generateStandardWorksheetPdfBase64();
+          loadedDoc = await tryLoadPdf(validBase64);
+        }
 
-        setPdfDoc(doc);
-        setNumPages(doc.numPages);
+        if (!loadedDoc) {
+          throw new Error('선생님이 업로드한 PDF 파일을 찾을 수 없거나 올바르지 않은 형식입니다.');
+        }
+
+        if (isCancelled) return;
+        setPdfDoc(loadedDoc);
+        setNumPages(loadedDoc.numPages);
         setIsLoading(false);
       } catch (err: any) {
-        console.warn('PDF.js loading failed, attempting recovery with valid template:', err);
-        try {
-          // Auto recover with generated valid standard PDF
-          const validPdfBase64 = await generateStandardWorksheetPdfBase64();
-          const validRaw = window.atob(validPdfBase64.split(',')[1]);
-          const validArray = new Uint8Array(validRaw.length);
-          for (let i = 0; i < validRaw.length; i++) {
-            validArray[i] = validRaw.charCodeAt(i);
-          }
-          const recoverTask = pdfjsLib.getDocument({ data: validArray });
-          const recoveredDoc = await recoverTask.promise;
-          
-          if (!isCancelled) {
-            setPdfDoc(recoveredDoc);
-            setNumPages(recoveredDoc.numPages);
-            setIsLoading(false);
-          }
-        } catch (recoveryErr) {
-          console.error('Final recovery failed:', recoveryErr);
-          if (!isCancelled) {
-            setErrorMsg('PDF 문서를 불러오는 중 오류가 발생했습니다.');
-            setIsLoading(false);
-          }
+        console.error('[PdfCanvasViewer] Error loading uploaded PDF:', err);
+        if (!isCancelled) {
+          setErrorMsg(err?.message || '선생님이 업로드한 PDF 문서를 불러오는 중 오류가 발생했습니다.');
+          setIsLoading(false);
         }
       }
     };

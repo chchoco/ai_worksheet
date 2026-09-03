@@ -34,6 +34,7 @@ import { Worksheet, ClassSettings } from '../types';
 import { formatBytes, formatDate } from '../utils/pdfHelper';
 import { DEFAULT_AI_UNITS } from '../data/defaultUnits';
 import { savePdfToLocalCache } from '../utils/pdfStorage';
+import { savePdfToCloudStorage } from '../firebase';
 
 interface TeacherAdminPageProps {
   isTeacherMode: boolean;
@@ -186,6 +187,9 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     if (uploadedUrl) {
       setPdfDataUrl(uploadedUrl);
       await savePdfToLocalCache(uploadedUrl, file);
+      const cleanUrlId = uploadedUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
+      savePdfToCloudStorage(cleanUrlId, file).catch(() => {});
+      savePdfToCloudStorage(file.name, file).catch(() => {});
       setIsReadingFile(false);
       setFeedbackMsg({
         type: 'success',
@@ -297,6 +301,10 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
     if (uploadedUrl) {
       await savePdfToLocalCache(wsId, file);
       await savePdfToLocalCache(uploadedUrl, file);
+      savePdfToCloudStorage(wsId, file).catch(() => {});
+      const cleanUrlId = uploadedUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
+      savePdfToCloudStorage(cleanUrlId, file).catch(() => {});
+      savePdfToCloudStorage(file.name, file).catch(() => {});
       const res = await onUpdateWorksheet(wsId, {
         pdfDataUrl: uploadedUrl,
         pdfFileName: file.name,
@@ -386,9 +394,20 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
       if (selectedFileObject) {
         if (editingId) {
           savePdfToLocalCache(editingId, selectedFileObject);
+          savePdfToCloudStorage(editingId, selectedFileObject).catch(() => {});
+        }
+        const createdWsId = (result as any)?.id || (result as any)?.worksheet?.id;
+        if (createdWsId) {
+          savePdfToLocalCache(createdWsId, selectedFileObject);
+          savePdfToCloudStorage(createdWsId, selectedFileObject).catch(() => {});
         }
         if (finalPdfUrl) {
           savePdfToLocalCache(finalPdfUrl, selectedFileObject);
+          const cleanUrlId = finalPdfUrl.replace('/api/pdf/', '').replace(/\.pdf$/, '').trim();
+          savePdfToCloudStorage(cleanUrlId, selectedFileObject).catch(() => {});
+        }
+        if (pdfFileName) {
+          savePdfToCloudStorage(pdfFileName, selectedFileObject).catch(() => {});
         }
       }
       setFeedbackMsg({
