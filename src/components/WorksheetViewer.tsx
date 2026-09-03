@@ -21,7 +21,7 @@ interface WorksheetViewerProps {
   worksheet: Worksheet | null;
   allWorksheets: Worksheet[];
   onSelectWorksheet: (id: string) => void;
-  onRecordDownload: (id: string) => void;
+  onRecordDownload?: (id: string) => void;
 }
 
 export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
@@ -53,7 +53,7 @@ export const WorksheetViewer: React.FC<WorksheetViewerProps> = ({
   const nextWorksheet = currentIndex < allWorksheets.length - 1 ? allWorksheets[currentIndex + 1] : null;
 
   const handleDownload = () => {
-    onRecordDownload(worksheet.id);
+    if (onRecordDownload) onRecordDownload(worksheet.id);
     downloadFile(worksheet.pdfDataUrl, worksheet.pdfFileName, worksheet.id);
   };
 

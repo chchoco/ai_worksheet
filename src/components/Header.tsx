@@ -29,14 +29,22 @@ export const Header: React.FC<HeaderProps> = ({
       )}
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        {/* Left: Branding & Archive Title */}
-        <div className="flex items-center gap-3">
+        {/* Left: Branding & School/Class/Subject Info */}
+        <div className="flex items-center gap-3.5">
           <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-100 shrink-0">
             <BookOpen className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              학습지 아카이브
+            <div className="flex items-center gap-1.5 mb-1 text-xs">
+              <span className="font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                {settings?.schoolName || '전남여자고등학교'}
+              </span>
+              <span className="font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                {settings?.className || '2학년 2학기'}
+              </span>
+            </div>
+            <h1 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">
+              {settings?.subject || '인공지능 기초'}
             </h1>
           </div>
         </div>

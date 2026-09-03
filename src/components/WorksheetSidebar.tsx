@@ -165,22 +165,14 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
                             {ws.title}
                           </p>
 
-                          {/* Badges / Stats (Real Values) */}
-                          <div className="flex items-center gap-2.5 mt-2 text-[10px] text-slate-500">
-                            <span className="flex items-center gap-0.5" title={`실제 다운로드 횟수: ${ws.downloadCount}회`}>
-                              <Download className="w-2.5 h-2.5 text-slate-400" />
-                              다운로드 {ws.downloadCount}
-                            </span>
-                            <span className="flex items-center gap-0.5" title={`실제 열람 횟수: ${ws.viewCount}회`}>
-                              <Eye className="w-2.5 h-2.5 text-slate-400" />
-                              열람 {ws.viewCount}
-                            </span>
-                            {ws.hasAnswerSheet && ws.showAnswerSheetToStudents && (
-                              <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1 rounded font-medium border border-indigo-100">
+                          {/* Badges */}
+                          {ws.hasAnswerSheet && ws.showAnswerSheetToStudents && (
+                            <div className="mt-2">
+                              <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded font-medium border border-indigo-100">
                                 해설 공개
                               </span>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })
@@ -194,7 +186,7 @@ export const WorksheetSidebar: React.FC<WorksheetSidebarProps> = ({
 
       {/* Footer Info */}
       <div className="p-3 border-t border-slate-200 bg-slate-50 text-[11px] text-slate-500 flex items-center justify-between">
-        <span>💡 학생은 로그인 없이 열람/인쇄 가능</span>
+        <span>💡 학생은 로그인 없이 바로 인쇄 / 다운로드 가능</span>
       </div>
     </aside>
   );

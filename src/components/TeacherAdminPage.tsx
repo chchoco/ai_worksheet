@@ -1092,14 +1092,6 @@ export const TeacherAdminPage: React.FC<TeacherAdminPageProps> = ({
                                       {ws.title}
                                     </h4>
                                     <div className="flex items-center gap-3 mt-1.5 text-[11px] text-slate-500">
-                                      <span className="flex items-center gap-1">
-                                        <Download className="w-3 h-3 text-slate-400" />
-                                        다운로드 {ws.downloadCount}회
-                                      </span>
-                                      <span className="flex items-center gap-1">
-                                        <Eye className="w-3 h-3 text-slate-400" />
-                                        열람 {ws.viewCount}회
-                                      </span>
                                       {ws.hasAnswerSheet && (
                                         <span
                                           className={`px-1.5 py-0.2 rounded font-semibold border ${
